@@ -1,0 +1,17 @@
+# Virtual environment
+qwen_env/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Hugging Face model cache (large files)
+*.safetensors
+*.bin
+*.gguf
+
+# OS
+.DS_Store
+Thumbs.db
