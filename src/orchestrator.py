@@ -39,6 +39,7 @@ from orchestrator_handoff import (
 
 import sys
 import shutil
+from docker_executor import DockerExecutor
 
 
 def _detect_system_python() -> str:
@@ -373,58 +374,58 @@ class Orchestrator:
     # EXECUTION (calls Module 8: Action Executor)
     # ══════════════════════════════════════════
 
-    def _execute_script(
+def _execute_script(
         self, exec_context: dict
     ) -> ExecutionResult:
         """
-        Execute the script using subprocess.run() with the
-        Python executable and environment from exec_context.
+        Execute the script inside a Docker container using
+        the DockerExecutor sandbox.
 
         This corresponds to Phase 8 (Execution Engine) in the
         code generation workflow and Step 2 in the debug workflow.
+
+        The script is read from disk, its contents are passed
+        to DockerExecutor.execute(), which runs it inside an
+        isolated container with all guardrails enforced:
+        --network none, --memory 512m, --read-only, etc.
         """
         script = exec_context["script_path"]
-        python = exec_context["python_executable"]
-        working_dir = exec_context["working_dir"]
-
-        # Build environment: merge current env with exec_context
-        env = os.environ.copy()
-        env.update(exec_context.get("env_vars", {}))
 
         self.logger.debug(
-            "Executing: %s %s (timeout=%ds)",
-            python, script, self.config.EXECUTION_TIMEOUT
+            "Executing in Docker sandbox: %s (timeout=%ds)",
+            script, self.config.EXECUTION_TIMEOUT
         )
 
-        start_time = time.time()
+        # Read the script contents from disk
         try:
-            proc = subprocess.run(
-                [python, script],
-                capture_output=True,
-                text=True,
-                timeout=self.config.EXECUTION_TIMEOUT,
-                cwd=working_dir,
-                env=env,
-            )
-            elapsed = time.time() - start_time
-
-            result = ExecutionResult(
-                exit_code=proc.returncode,
-                stdout=proc.stdout,
-                stderr=proc.stderr,
-                execution_time=elapsed,
-                error_type=self._classify_error_type(proc.stderr),
-            )
-
-        except subprocess.TimeoutExpired:
-            elapsed = time.time() - start_time
-            result = ExecutionResult(
+            with open(script, "r") as f:
+                code = f.read()
+        except FileNotFoundError:
+            return ExecutionResult(
                 exit_code=-1,
                 stdout="",
-                stderr="TimeoutError: Script exceeded time limit",
-                execution_time=elapsed,
-                error_type="TimeoutError",
+                stderr=f"FileNotFoundError: Script not found: {script}",
+                execution_time=0.0,
+                error_type="FileNotFoundError",
             )
+
+        # Execute inside Docker container
+        executor = DockerExecutor(
+            timeout=self.config.EXECUTION_TIMEOUT
+        )
+        docker_result = executor.execute(code)
+
+        # Map DockerExecutor result to orchestrator's ExecutionResult
+        result = ExecutionResult(
+            exit_code=docker_result.return_code,
+            stdout=docker_result.stdout,
+            stderr=docker_result.stderr,
+            execution_time=docker_result.execution_time,
+            error_type=(
+                docker_result.error_type
+                or self._classify_error_type(docker_result.stderr)
+            ),
+        )
 
         self.logger.info(
             "Execution result: exit_code=%d, time=%.2fs, "
@@ -435,7 +436,6 @@ class Orchestrator:
         )
 
         return result
-
     # ══════════════════════════════════════════
     # ERROR CLASSIFICATION (basic, for orchestrator)
     # ══════════════════════════════════════════
