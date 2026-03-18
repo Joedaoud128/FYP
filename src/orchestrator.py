@@ -1,51 +1,14 @@
-"""
-orchestrator.py
-===============
-Module 11: Agent Orchestrator (Control Loop)
-
-This is the meta-controller of the AI Coding Agent. It oversees
-the entire pipeline, manages the handoff between Code Generation
-(Joe) and Code Debugging (Raymond), and enforces termination rules.
-
-Two entry points:
-    - run_generate(prompt) : Generate Mode (full pipeline)
-    - run_debug(script_path) : Debug Mode (skip generation)
-
-Termination rules (from architecture spec):
-    - Maximum 10 iterations
-    - Same error 3 consecutive times → halt
-    - 30-minute session timeout
-
-Architecture reference: Module 11 in Figure 1 (AI Coding Agent
-Workflow), represented as the dashed purple border.
-
-Author: Maria (Orchestrator)
-"""
-
 import os
-import time
-import json
-import logging
-import subprocess
-from datetime import datetime
-from typing import Optional
-
-from orchestrator_handoff import (
-    HandoffValidator,
-    EnvironmentPreparer,
-    HandoffValidationError,
-    process_handoff,
-)
-
 import sys
+import json
 import shutil
-from docker_executor import DockerExecutor
+import logging
+from datetime import datetime
+from typing import Any
 
 
 def _detect_system_python() -> str:
-    if sys.platform == "win32":
-        if shutil.which("python"):
-            return "python"
+    """Detect the correct Python command for this OS."""
     if shutil.which("python3"):
         return "python3"
     if shutil.which("python"):
@@ -53,687 +16,521 @@ def _detect_system_python() -> str:
     return sys.executable
 
 
-# The default Python command for this system
 SYSTEM_PYTHON = _detect_system_python()
 
 
 # ──────────────────────────────────────────────
-# Orchestrator Configuration
+# Custom Exceptions
 # ──────────────────────────────────────────────
 
-class OrchestratorConfig:
-    """
-    Central configuration for the Orchestrator.
-    Values can be overridden via environment variables
-    (set in docker-compose.yml for container deployment).
-    """
-    MAX_ITERATIONS: int = int(
-        os.environ.get("MAX_ITERATIONS", "10")
-    )
-    MAX_SAME_ERROR: int = int(
-        os.environ.get("MAX_SAME_ERROR", "3")
-    )
-    SESSION_TIMEOUT: int = int(
-        os.environ.get("SESSION_TIMEOUT", "1800")  # 30 min
-    )
-    EXECUTION_TIMEOUT: int = int(
-        os.environ.get("EXECUTION_TIMEOUT", "60")  # per script
-    )
-    WORKSPACE_DIR: str = os.environ.get(
-        "WORKSPACE_DIR", "/workspace"
-    )
+class HandoffValidationError(Exception):
+    """Base exception for all handoff validation failures."""
+    pass
 
 
-# ──────────────────────────────────────────────
-# Execution Result (returned by each iteration)
-# ──────────────────────────────────────────────
+class MissingFieldError(HandoffValidationError):
+    """Raised when required fields are absent from the payload."""
+    pass
 
-class ExecutionResult:
-    """
-    Structured result from a single script execution.
-    Maps to what the Execution Engine (Phase 8) returns:
-    return code, stdout, stderr, and execution time.
-    """
 
-    def __init__(
-        self,
-        exit_code: int,
-        stdout: str,
-        stderr: str,
-        execution_time: float,
-        error_type: Optional[str] = None,
-    ):
-        self.exit_code = exit_code
-        self.stdout = stdout
-        self.stderr = stderr
-        self.execution_time = execution_time
-        self.error_type = error_type
-        self.success = (exit_code == 0 and not stderr.strip())
+class GenerationFailedError(HandoffValidationError):
+    """Raised when generation_status is not 'success'."""
+    pass
 
-    def to_dict(self) -> dict:
-        return {
-            "exit_code": self.exit_code,
-            "stdout": self.stdout,
-            "stderr": self.stderr,
-            "execution_time": self.execution_time,
-            "error_type": self.error_type,
-            "success": self.success,
-        }
+
+class FileValidationError(HandoffValidationError):
+    """Raised when a referenced file or directory does not exist."""
+    pass
+
+
+class PathSecurityError(HandoffValidationError):
+    """Raised when a path violates workspace confinement rules."""
+    pass
 
 
 # ──────────────────────────────────────────────
-# Main Orchestrator Class (Module 11)
+# HandoffValidator (Schema A validation)
 # ──────────────────────────────────────────────
 
-class Orchestrator:
+class HandoffValidator:
     """
-    Module 11: Agent Orchestrator / Control Loop.
+    Validates the generation_output payload (Schema A) before
+    the Orchestrator transforms it and passes it to the Code
+    Debugging service.
 
-    The meta-controller that:
-    1. Manages the handoff from Code Generation to Code Debugging
-    2. Runs the Execute-Analyze-Fix loop
-    3. Enforces termination rules (max iterations, repeated
-       errors, session timeout)
-    4. Logs all orchestrator-level events (Module 12 source)
+    This validation is ONLY triggered when the Code Generation
+    service's execution failed and the handoff is needed. It
+    performs data integrity checks on the JSON payload — it does
+    NOT execute any commands (command validation is handled by
+    the Security & Guardrails service inside the shared pipeline).
+
+    Validation checks (V1-V7):
+        V1: Required fields present
+        V2: Generation status is "success" (generation completed)
+        V3: Script file exists on disk
+        V4: Workspace directory exists
+        V5: Path security (data validation — no traversal)
+        V6: Venv validity (if venv was created)
+        V7: Requirements consistency (non-blocking warning)
 
     Usage:
-        orch = Orchestrator()
-
-        # Generate Mode (full pipeline)
-        result = orch.run_generate("Write a script to ...")
-
-        # Debug Mode (existing script)
-        result = orch.run_debug("/workspace/input/broken.py")
+        validator = HandoffValidator()
+        validated_payload = validator.validate(generation_output)
     """
 
-    def __init__(self, config: OrchestratorConfig = None):
-        self.config = config or OrchestratorConfig()
-        self.logger = logging.getLogger("orchestrator")
+    # V1: Required top-level fields in Schema A
+    REQUIRED_FIELDS = [
+        "task_id",
+        "generated_script",
+        "requirements",
+        "workspace_dir",
+        "venv_created",
+        "generation_status",
+        "metadata",
+    ]
 
-        # ── State tracking ──
-        self.iteration = 0
-        self.error_history = []
-        self.session_start = None
+    # V1: Required fields inside the metadata sub-object
+    REQUIRED_METADATA_FIELDS = [
+        "complexity",
+        "domain",
+        "estimated_libraries",
+        "generation_timestamp",
+    ]
 
-        # ── Handoff components (from Step 3) ──
-        self.validator = HandoffValidator()
-        self.preparer = EnvironmentPreparer()
+    def __init__(self):
+        self.logger = logging.getLogger("orchestrator.validator")
 
-    # ══════════════════════════════════════════
-    # ENTRY POINT 1: Generate Mode
-    # ══════════════════════════════════════════
-
-    def run_generate(self, prompt: str) -> dict:
+    def validate(self, payload: dict) -> dict:
         """
-        Full pipeline: User prompt → Code Generation (Joe) →
-        Handoff Validation → Environment Preparation →
-        Debug Loop (Raymond) → Result.
-
-        This is the Generate Mode entry point.
+        Run all validation checks (V1-V7) on the generation_output
+        payload (Schema A). Returns the validated payload if all
+        checks pass. Raises a specific exception if any check fails.
 
         Args:
-            prompt: Natural language task description from user.
+            payload: Schema A JSON from the Code Generation service.
 
         Returns:
-            Final result dict with status, output, and metadata.
-        """
-        self._start_session()
-        self.logger.info(
-            "=== GENERATE MODE START === Prompt: %s", prompt
-        )
+            The same payload, confirmed valid.
 
-        # ── Phase 1: Call Joe's Code Generation module ──
-        # (Joe's module is imported and called here.
-        #  Replace with actual import when Joe's code is ready.)
-        try:
-            generation_output = self._call_code_generation(prompt)
-        except Exception as e:
-            self.logger.error(
-                "Code generation failed: %s", str(e)
-            )
-            return self._build_result(
-                status="failure",
-                reason="generation_error",
-                error=str(e),
-            )
-
-        # ── Phase 2: Validate handoff (your code from Step 3) ──
-        try:
-            validated = self.validator.validate(generation_output)
-        except HandoffValidationError as e:
-            self.logger.error(
-                "Handoff validation failed: %s", str(e)
-            )
-            return self._build_result(
-                status="failure",
-                reason="handoff_validation_error",
-                error=str(e),
-            )
-
-        # ── Phase 3: Prepare execution context ──
-        exec_context = self.preparer.prepare(validated)
-
-        # ── Phase 4: Enter the debug loop ──
-        return self._run_debug_loop(exec_context)
-
-    # ══════════════════════════════════════════
-    # ENTRY POINT 2: Debug Mode
-    # ══════════════════════════════════════════
-
-    def run_debug(self, script_path: str) -> dict:
-        """
-        Debug Mode: Skip generation, go directly to the
-        Execute-Analyze-Fix loop with an existing script.
-
-        This is invoked as:
-            python agent.py --mode debug --fix broken_script.py
-
-        Args:
-            script_path: Path to the broken Python script.
-
-        Returns:
-            Final result dict with status, output, and metadata.
-        """
-        self._start_session()
-        self.logger.info(
-            "=== DEBUG MODE START === Script: %s", script_path
-        )
-
-        # Build a minimal execution context (no generation data)
-        exec_context = {
-            "script_path": os.path.abspath(script_path),
-            "working_dir": os.path.dirname(
-                os.path.abspath(script_path)
-            ),
-            "python_executable": SYSTEM_PYTHON,
-            "env_vars": {},
-            "task_id": f"debug_{int(time.time())}",
-        }
-
-        # Validate the script exists and is inside workspace
-        if not os.path.isfile(exec_context["script_path"]):
-            return self._build_result(
-                status="failure",
-                reason="script_not_found",
-                error=f"File not found: {script_path}",
-            )
-
-        return self._run_debug_loop(exec_context)
-
-    # ══════════════════════════════════════════
-    # THE DEBUG LOOP (Execute-Analyze-Fix)
-    # ══════════════════════════════════════════
-
-    def _run_debug_loop(self, exec_context: dict) -> dict:
-        """
-        The core Execute-Analyze-Fix loop.
-
-        This implements the iterative debugging cycle from
-        the Code Debugging Workflow (Figure 3):
-            Step 2: Execute script
-            Step 3: Check exit code
-            Step 4: Iteration control
-            Step 5: Parse stderr
-            Step 6: Error classifier
-            Steps 7-8: Apply fix and loop back
-
-        The Orchestrator manages the loop. Raymond's module
-        handles the actual execution, classification, and fixing.
-
-        Args:
-            exec_context: Schema B payload (execution_context).
-
-        Returns:
-            Final result dict.
+        Raises:
+            MissingFieldError: V1 - required fields are missing.
+            GenerationFailedError: V2 - generation did not succeed.
+            FileValidationError: V3/V4/V6 - files or dirs not found.
+            PathSecurityError: V5 - path traversal detected.
         """
         self.logger.info(
-            "Entering debug loop for task: %s",
-            exec_context["task_id"]
+            "Starting handoff validation for task: %s",
+            payload.get("task_id", "UNKNOWN")
         )
 
-        while self.iteration < self.config.MAX_ITERATIONS:
-            self.iteration += 1
+        self._check_required_fields(payload)       # V1
+        self._check_generation_status(payload)      # V2
+        self._check_script_exists(payload)          # V3
+        self._check_workspace_exists(payload)       # V4
+        self._check_path_security(payload)          # V5
+        self._check_venv_if_created(payload)        # V6
+        self._check_requirements_consistency(payload)  # V7
 
-            # ── Check session timeout ──
-            if self._is_session_timed_out():
-                self.logger.error(
-                    "Session timeout reached (%d seconds)",
-                    self.config.SESSION_TIMEOUT
-                )
-                return self._build_result(
-                    status="failure",
-                    reason="session_timeout",
-                    error=(
-                        f"Session exceeded "
-                        f"{self.config.SESSION_TIMEOUT}s limit"
-                    ),
-                    exec_context=exec_context,
-                )
-
-            self.logger.info(
-                "── Iteration %d / %d ──",
-                self.iteration, self.config.MAX_ITERATIONS
-            )
-
-            # ── Step 2: Execute the script ──
-            result = self._execute_script(exec_context)
-
-            # ── Step 3: Check exit code ──
-            if result.success:
-                self.logger.info(
-                    "Script executed successfully on "
-                    "iteration %d", self.iteration
-                )
-                return self._build_result(
-                    status="success",
-                    output=result.stdout,
-                    exec_context=exec_context,
-                )
-
-            # ── Step 4: Check for repeated errors ──
-            self.error_history.append(result.error_type)
-
-            if self._is_same_error_repeated():
-                self.logger.error(
-                    "Same error '%s' occurred %d consecutive "
-                    "times. Halting.",
-                    result.error_type,
-                    self.config.MAX_SAME_ERROR,
-                )
-                return self._build_result(
-                    status="failure",
-                    reason="repeated_error",
-                    error=result.error_type,
-                    stderr=result.stderr,
-                    exec_context=exec_context,
-                )
-
-            # ── Steps 5-8: Classify error and apply fix ──
-            # (This is Raymond's domain. The orchestrator calls
-            #  his module and receives an updated exec_context.)
-            exec_context = self._call_debug_fix(
-                exec_context, result
-            )
-
-        # ── Max iterations exhausted ──
-        self.logger.error(
-            "Max iterations (%d) reached. Halting.",
-            self.config.MAX_ITERATIONS
+        self.logger.info(
+            "Handoff validation PASSED for task: %s",
+            payload["task_id"]
         )
-        return self._build_result(
-            status="failure",
-            reason="max_iterations",
-            error=(
-                f"Could not fix script after "
-                f"{self.config.MAX_ITERATIONS} attempts"
-            ),
-            exec_context=exec_context,
-        )
+        return payload
 
-    # ══════════════════════════════════════════
-    # EXECUTION (calls Module 8: Action Executor)
-    # ══════════════════════════════════════════
+    # ── V1: Required fields present ──
 
-def _execute_script(
-        self, exec_context: dict
-    ) -> ExecutionResult:
+    def _check_required_fields(self, payload: dict) -> None:
+        """V1: Verify all required fields exist in the payload."""
+        missing = [
+            f for f in self.REQUIRED_FIELDS
+            if f not in payload
+        ]
+        if missing:
+            msg = f"Missing required fields: {missing}"
+            self.logger.error("V1 FAILED - %s", msg)
+            raise MissingFieldError(msg)
+
+        # Also check metadata sub-fields
+        metadata = payload.get("metadata", {})
+        missing_meta = [
+            f for f in self.REQUIRED_METADATA_FIELDS
+            if f not in metadata
+        ]
+        if missing_meta:
+            msg = f"Missing metadata fields: {missing_meta}"
+            self.logger.error("V1 FAILED - %s", msg)
+            raise MissingFieldError(msg)
+
+        self.logger.debug("V1 PASSED - All required fields present")
+
+    # ── V2: Generation status is "success" ──
+
+    def _check_generation_status(self, payload: dict) -> None:
         """
-        Execute the script inside a Docker container using
-        the DockerExecutor sandbox.
-
-        This corresponds to Phase 8 (Execution Engine) in the
-        code generation workflow and Step 2 in the debug workflow.
-
-        The script is read from disk, its contents are passed
-        to DockerExecutor.execute(), which runs it inside an
-        isolated container with all guardrails enforced:
-        --network none, --memory 512m, --read-only, etc.
+        V2: Verify generation completed successfully.
+        Note: 'success' here means the generation process completed
+        (code was produced), NOT that the script executed without
+        errors. The script may have failed execution, which is why
+        the handoff to the debugging service is being triggered.
         """
-        script = exec_context["script_path"]
+        status = payload["generation_status"]
+        if status != "success":
+            msg = (
+                f"Generation status is '{status}', "
+                f"expected 'success'. Pipeline halted."
+            )
+            self.logger.error("V2 FAILED - %s", msg)
+            raise GenerationFailedError(msg)
+
+        self.logger.debug("V2 PASSED - Generation status is 'success'")
+
+    # ── V3: Script file exists on disk ──
+
+    def _check_script_exists(self, payload: dict) -> None:
+        """V3: Verify the generated script file exists."""
+        script_path = payload["generated_script"]
+        if not os.path.isfile(script_path):
+            msg = f"Generated script not found: {script_path}"
+            self.logger.error("V3 FAILED - %s", msg)
+            raise FileValidationError(msg)
 
         self.logger.debug(
-            "Executing in Docker sandbox: %s (timeout=%ds)",
-            script, self.config.EXECUTION_TIMEOUT
+            "V3 PASSED - Script exists: %s", script_path
         )
 
-        # Read the script contents from disk
-        try:
-            with open(script, "r") as f:
-                code = f.read()
-        except FileNotFoundError:
-            return ExecutionResult(
-                exit_code=-1,
-                stdout="",
-                stderr=f"FileNotFoundError: Script not found: {script}",
-                execution_time=0.0,
-                error_type="FileNotFoundError",
+    # ── V4: Workspace directory exists ──
+
+    def _check_workspace_exists(self, payload: dict) -> None:
+        """V4: Verify the workspace directory exists."""
+        workspace = payload["workspace_dir"]
+        if not os.path.isdir(workspace):
+            msg = f"Workspace directory not found: {workspace}"
+            self.logger.error("V4 FAILED - %s", msg)
+            raise FileValidationError(msg)
+
+        self.logger.debug(
+            "V4 PASSED - Workspace exists: %s", workspace
+        )
+
+    # ── V5: Path security (data validation at handoff boundary) ──
+
+    def _check_path_security(self, payload: dict) -> None:
+        """
+        V5: Verify the script path is inside the workspace.
+
+        This is DATA VALIDATION at the handoff boundary — checking
+        that the JSON payload from the Code Generation service does
+        not contain path traversal attacks BEFORE any data reaches
+        the Code Debugging service.
+
+        This is complementary to (not a duplication of) Module 7's
+        COMMAND VALIDATION, which checks commands at execution time
+        inside the shared pipeline (6→7→8). The two layers serve
+        different purposes:
+          - Orchestrator validates DATA (JSON payloads)
+          - Module 7 validates ACTIONS (commands to execute)
+        """
+        script_path = os.path.realpath(payload["generated_script"])
+        workspace = os.path.realpath(payload["workspace_dir"])
+
+        # Check for '..' in the raw path (before realpath resolves it)
+        raw_script = payload["generated_script"]
+        if ".." in raw_script:
+            msg = (
+                f"Path traversal detected in script path: "
+                f"{raw_script}"
+            )
+            self.logger.error("V5 FAILED - %s", msg)
+            raise PathSecurityError(msg)
+
+        # Check that resolved script path starts with workspace
+        if not script_path.startswith(workspace):
+            msg = (
+                f"Script path '{script_path}' is outside "
+                f"workspace '{workspace}'"
+            )
+            self.logger.error("V5 FAILED - %s", msg)
+            raise PathSecurityError(msg)
+
+        self.logger.debug(
+            "V5 PASSED - Script is inside workspace"
+        )
+
+    # ── V6: Venv validity (conditional) ──
+
+    def _check_venv_if_created(self, payload: dict) -> None:
+        """
+        V6: If venv_created is True, verify the venv exists
+        and contains a valid Python binary.
+
+        The venv creation is an internal decision made by the
+        Code Generation service based on task requirements —
+        it is NOT a user-configurable option.
+        """
+        if not payload.get("venv_created", False):
+            self.logger.debug(
+                "V6 SKIPPED - No venv was created"
+            )
+            return
+
+        venv_path = payload.get("venv_path")
+        if not venv_path:
+            msg = (
+                "venv_created is True but venv_path "
+                "is missing from the payload"
+            )
+            self.logger.error("V6 FAILED - %s", msg)
+            raise MissingFieldError(msg)
+
+        # Check the venv directory exists
+        if not os.path.isdir(venv_path):
+            msg = f"Venv directory not found: {venv_path}"
+            self.logger.error("V6 FAILED - %s", msg)
+            raise FileValidationError(msg)
+
+        # Check the Python binary inside the venv
+        if sys.platform == "win32":
+            python_bin = os.path.join(
+                venv_path, "Scripts", "python.exe"
+            )
+        else:
+            python_bin = os.path.join(
+                venv_path, "bin", "python"
+            )
+        if not os.path.isfile(python_bin):
+            msg = (
+                f"Venv Python binary not found: {python_bin}"
+            )
+            self.logger.error("V6 FAILED - %s", msg)
+            raise FileValidationError(msg)
+
+        self.logger.debug(
+            "V6 PASSED - Venv is valid at: %s", venv_path
+        )
+
+    # ── V7: Requirements consistency ──
+
+    def _check_requirements_consistency(self, payload: dict) -> None:
+        """
+        V7: Warn if requirements list is empty but script likely
+        has imports. This is a non-blocking warning.
+        """
+        requirements = payload.get("requirements", [])
+        if not requirements:
+            self.logger.warning(
+                "V7 WARNING - Requirements list is empty. "
+                "If the script has import statements, the "
+                "Code Debugging service may encounter "
+                "ModuleNotFoundError. Continuing anyway."
+            )
+        else:
+            self.logger.debug(
+                "V7 PASSED - %d requirements listed: %s",
+                len(requirements), requirements
             )
 
-        # Execute inside Docker container
-        executor = DockerExecutor(
-            timeout=self.config.EXECUTION_TIMEOUT
-        )
-        docker_result = executor.execute(code)
 
-        # Map DockerExecutor result to orchestrator's ExecutionResult
-        result = ExecutionResult(
-            exit_code=docker_result.return_code,
-            stdout=docker_result.stdout,
-            stderr=docker_result.stderr,
-            execution_time=docker_result.execution_time,
-            error_type=(
-                docker_result.error_type
-                or self._classify_error_type(docker_result.stderr)
-            ),
-        )
+# ──────────────────────────────────────────────
+# EnvironmentPreparer (Schema A → Schema B)
+# ──────────────────────────────────────────────
 
+class EnvironmentPreparer:
+    """
+    Transforms a validated generation_output (Schema A) into
+    an execution_context (Schema B) that the Code Debugging
+    service can consume directly.
+
+    The key decision is whether a venv exists:
+    - If YES: use the venv's Python and set env vars.
+    - If NO:  use system python3 and flag pending installs.
+
+    The Code Debugging service will re-execute the script as
+    its first step (deliberate design choice) because the
+    environment configured here may differ from the one used
+    during the Code Generation service's Phase 8 execution.
+
+    Usage:
+        preparer = EnvironmentPreparer()
+        exec_ctx = preparer.prepare(validated_payload)
+    """
+
+    def __init__(self):
+        self.logger = logging.getLogger("orchestrator.preparer")
+
+    def prepare(self, payload: dict) -> dict:
+        """
+        Transform Schema A (generation_output) into Schema B
+        (execution_context).
+
+        Args:
+            payload: A validated generation_output dictionary.
+
+        Returns:
+            An execution_context dictionary (Schema B) ready
+            for the Code Debugging service.
+        """
         self.logger.info(
-            "Execution result: exit_code=%d, time=%.2fs, "
-            "error_type=%s",
-            result.exit_code,
-            result.execution_time,
-            result.error_type or "none",
+            "Preparing execution context for task: %s",
+            payload["task_id"]
         )
 
-        return result
-    # ══════════════════════════════════════════
-    # ERROR CLASSIFICATION (basic, for orchestrator)
-    # ══════════════════════════════════════════
-
-    def _classify_error_type(self, stderr: str) -> Optional[str]:
-        """
-        Basic error classification from stderr content.
-        This maps to Step 6 (Error Classifier) in the debug
-        workflow. Raymond's module provides the full hybrid
-        (deterministic + probabilistic) classifier.
-
-        The Orchestrator only needs a simplified version to
-        track repeated errors for its termination logic.
-        """
-        if not stderr or not stderr.strip():
-            return None
-
-        # Deterministic patterns (from debug workflow)
-        error_patterns = {
-            "ModuleNotFoundError": "ModuleNotFoundError",
-            "ImportError": "ImportError",
-            "SyntaxError": "SyntaxError",
-            "IndentationError": "IndentationError",
-            "FileNotFoundError": "FileNotFoundError",
-            "NameError": "NameError",
-            "TypeError": "TypeError",
-            "ValueError": "ValueError",
-            "TimeoutError": "TimeoutError",
-            "ConnectionError": "ConnectionError",
+        # Start building Schema B
+        exec_context = {
+            "script_path": payload["generated_script"],
+            "working_dir": payload["workspace_dir"],
+            "task_id": payload["task_id"],
         }
 
-        for pattern, error_type in error_patterns.items():
-            if pattern in stderr:
-                return error_type
+        # The key branching logic: venv or no venv
+        if payload.get("venv_created") and payload.get("venv_path"):
+            exec_context = self._prepare_with_venv(
+                exec_context, payload["venv_path"]
+            )
+        else:
+            exec_context = self._prepare_without_venv(
+                exec_context, payload.get("requirements", [])
+            )
 
-        return "UnclassifiedError"
-
-    # ══════════════════════════════════════════
-    # DEBUG FIX (calls Raymond's module)
-    # ══════════════════════════════════════════
-
-    def _call_debug_fix(
-        self,
-        exec_context: dict,
-        result: ExecutionResult,
-    ) -> dict:
-        """
-        Call Raymond's debugging module to analyze the error
-        and apply a fix.
-
-        This is a placeholder that will be replaced with the
-        actual import of Raymond's code_debugger module when
-        it is ready. The interface contract is:
-
-        Input:  exec_context (Schema B) + ExecutionResult
-        Output: updated exec_context (with fix applied)
-
-        Raymond's module handles:
-            - Step 5: Parse stderr output
-            - Step 6: Error classifier (hybrid)
-            - Step 7: Select corrective tool
-            - Step 8: Apply fix (write file / pip install)
-        """
         self.logger.info(
-            "Calling debug module: error_type=%s",
-            result.error_type
-        )
-
-        # ──────────────────────────────────────────
-        # TODO: Replace with actual import when
-        #       Raymond's module is ready:
-        #
-        #   from code_debugger import DebugModule
-        #   debugger = DebugModule()
-        #   exec_context = debugger.analyze_and_fix(
-        #       exec_context, result
-        #   )
-        # ──────────────────────────────────────────
-
-        # Placeholder: log what would happen
-        self.logger.warning(
-            "DEBUG MODULE PLACEHOLDER - In production, "
-            "Raymond's code_debugger.analyze_and_fix() "
-            "would be called here with error_type=%s",
-            result.error_type,
+            "Execution context ready. "
+            "Python executable: %s | "
+            "Pending installs: %d",
+            exec_context["python_executable"],
+            len(exec_context.get("pending_installs", []))
         )
 
         return exec_context
 
-    # ══════════════════════════════════════════
-    # CODE GENERATION (calls Joe's module)
-    # ══════════════════════════════════════════
-
-    def _call_code_generation(self, prompt: str) -> dict:
+    def _prepare_with_venv(
+        self, exec_context: dict, venv_path: str
+    ) -> dict:
         """
-        Call Joe's code generation module to produce a script
-        from a natural language prompt.
-
-        This is a placeholder that will be replaced with the
-        actual import of Joe's code_generator module when it
-        is ready. The interface contract is:
-
-        Input:  Natural language prompt (string)
-        Output: generation_output (Schema A)
-
-        Joe's module handles:
-            - Phase 2: Environment extraction
-            - Phase 3: Requirement parsing
-            - Phase 4: Multi-step planner (ReAct loop)
-            - Phase 5: Library identification & validation
-            - Phase 6: Code generation (LLM)
-            - Phase 7: Syntax validation (AST parse)
-            - Phase 8: Write script to disk
+        Configure execution context to use the virtual
+        environment that the Code Generation service created.
         """
-        self.logger.info(
-            "Calling code generation module with prompt: %s",
-            prompt[:100]
-        )
+        if sys.platform == "win32":
+            venv_bin = os.path.join(venv_path, "Scripts")
+            venv_python = os.path.join(venv_bin, "python.exe")
+        else:
+            venv_bin = os.path.join(venv_path, "bin")
+            venv_python = os.path.join(venv_bin, "python")
 
-        # ──────────────────────────────────────────
-        # TODO: Replace with actual import when
-        #       Joe's module is ready:
-        #
-        #   from code_generator import GenerateModule
-        #   generator = GenerateModule()
-        #   return generator.generate(prompt)
-        # ──────────────────────────────────────────
-
-        raise NotImplementedError(
-            "Code generation module is not yet integrated. "
-            "Replace this placeholder with Joe's module."
-        )
-
-    # ══════════════════════════════════════════
-    # TERMINATION CHECKS
-    # ══════════════════════════════════════════
-
-    def _is_same_error_repeated(self) -> bool:
-        """
-        Check if the same error type has occurred N
-        consecutive times (default: 3).
-        This is a termination condition from Module 11 spec.
-        """
-        n = self.config.MAX_SAME_ERROR
-        if len(self.error_history) < n:
-            return False
-
-        last_n = self.error_history[-n:]
-        return len(set(last_n)) == 1
-
-    def _is_session_timed_out(self) -> bool:
-        """
-        Check if the session has exceeded the timeout limit
-        (default: 30 minutes / 1800 seconds).
-        """
-        if self.session_start is None:
-            return False
-
-        elapsed = time.time() - self.session_start
-        return elapsed > self.config.SESSION_TIMEOUT
-
-    # ══════════════════════════════════════════
-    # SESSION MANAGEMENT
-    # ══════════════════════════════════════════
-
-    def _start_session(self) -> None:
-        """Initialize session state for a new run."""
-        self.iteration = 0
-        self.error_history = []
-        self.session_start = time.time()
-        self.logger.info(
-            "Session started at %s | Config: "
-            "max_iter=%d, max_same_error=%d, timeout=%ds",
-            datetime.now().isoformat(),
-            self.config.MAX_ITERATIONS,
-            self.config.MAX_SAME_ERROR,
-            self.config.SESSION_TIMEOUT,
-        )
-
-    def _build_result(self, **kwargs) -> dict:
-        """
-        Build a standardized result dictionary.
-        This is what gets returned to the user or logged.
-
-        Includes orchestrator metadata: iteration count,
-        session duration, error history, and termination reason.
-        """
-        elapsed = 0.0
-        if self.session_start:
-            elapsed = time.time() - self.session_start
-
-        result = {
-            "status": kwargs.get("status", "unknown"),
-            "reason": kwargs.get("reason"),
-            "output": kwargs.get("output"),
-            "error": kwargs.get("error"),
-            "stderr": kwargs.get("stderr"),
-            "orchestrator_metadata": {
-                "iterations": self.iteration,
-                "session_duration_seconds": round(elapsed, 2),
-                "error_history": self.error_history,
-                "termination_reason": kwargs.get(
-                    "reason", "success"
-                ),
-                "timestamp": datetime.now().isoformat(),
-            },
+        exec_context["python_executable"] = venv_python
+        exec_context["env_vars"] = {
+            "VIRTUAL_ENV": venv_path,
+            "PATH": (
+                venv_bin
+                + os.pathsep
+                + os.environ.get("PATH", "")
+            ),
         }
 
-        # Include task_id if exec_context is provided
-        exec_ctx = kwargs.get("exec_context")
-        if exec_ctx:
-            result["task_id"] = exec_ctx.get("task_id")
-
-        self.logger.info(
-            "=== SESSION END === Status: %s | "
-            "Iterations: %d | Duration: %.1fs | "
-            "Reason: %s",
-            result["status"],
-            self.iteration,
-            elapsed,
-            result["reason"] or "success",
+        self.logger.debug(
+            "Venv mode: using %s", venv_python
         )
+        return exec_context
 
-        return result
+    def _prepare_without_venv(
+        self, exec_context: dict, requirements: list
+    ) -> dict:
+        """
+        Configure execution context with system Python.
+        Flag any requirements as pending installs so the Code
+        Debugging service's error classifier can resolve
+        ModuleNotFoundError using the correct package names.
+        """
+        exec_context["python_executable"] = SYSTEM_PYTHON
+        exec_context["env_vars"] = {}
+
+        if requirements:
+            exec_context["pending_installs"] = requirements
+            self.logger.debug(
+                "No-venv mode: %d packages flagged "
+                "as pending installs",
+                len(requirements)
+            )
+        else:
+            self.logger.debug(
+                "No-venv mode: no pending installs"
+            )
+
+        return exec_context
 
 
 # ──────────────────────────────────────────────
-# CLI Entry Point
+# Convenience function for the Orchestrator loop
 # ──────────────────────────────────────────────
 
-def main():
+def process_handoff(generation_output: dict) -> dict:
     """
-    Command-line entry point for the AI Coding Agent.
+    One-call convenience function that validates the
+    generation output and prepares the execution context.
 
-    Usage:
-        # Generate Mode
-        python orchestrator.py --mode generate \
-            --prompt "Write a script to display Microsoft stock"
+    This is what the Orchestrator's main loop calls ONLY
+    when the Code Generation service's execution has failed
+    and the handoff to the Code Debugging service is needed.
 
-        # Debug Mode
-        python orchestrator.py --mode debug \
-            --fix /workspace/input/broken_script.py
+    Args:
+        generation_output: Schema A payload from the Code
+                          Generation service.
+
+    Returns:
+        Schema B (execution_context) for the Code Debugging
+        service.
+
+    Raises:
+        HandoffValidationError: If any validation check fails.
     """
-    import argparse
+    validator = HandoffValidator()
+    preparer = EnvironmentPreparer()
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format=(
-            "%(asctime)s [%(name)s] "
-            "%(levelname)s: %(message)s"
-        ),
-    )
+    # Step 1: Validate Schema A
+    validated = validator.validate(generation_output)
 
-    parser = argparse.ArgumentParser(
-        description="AI Coding Agent - Orchestrator (Module 11)"
-    )
-    parser.add_argument(
-        "--mode",
-        choices=["generate", "debug"],
-        required=True,
-        help="Operation mode: generate or debug",
-    )
-    parser.add_argument(
-        "--prompt",
-        type=str,
-        default=None,
-        help="Natural language prompt (Generate Mode)",
-    )
-    parser.add_argument(
-        "--fix",
-        type=str,
-        default=None,
-        help="Path to script to debug (Debug Mode)",
-    )
-    args = parser.parse_args()
+    # Step 2: Transform into Schema B
+    exec_context = preparer.prepare(validated)
 
-    orch = Orchestrator()
+    return exec_context
 
-    if args.mode == "generate":
-        if not args.prompt:
-            parser.error(
-                "--prompt is required for Generate Mode"
-            )
-        result = orch.run_generate(args.prompt)
 
-    elif args.mode == "debug":
-        if not args.fix:
-            parser.error(
-                "--fix is required for Debug Mode"
-            )
-        result = orch.run_debug(args.fix)
-
-    # Print the final result
-    print("\n" + "=" * 60)
-    print("FINAL RESULT")
-    print("=" * 60)
-    print(json.dumps(result, indent=2, default=str))
-
+# ──────────────────────────────────────────────
+# Example / self-test
+# ──────────────────────────────────────────────
 
 if __name__ == "__main__":
-    main()
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s"
+    )
+
+    # Example Schema A payload (from the Code Generation service)
+    example_generation_output = {
+        "task_id": "gen_001",
+        "generated_script": "/workspace/output/stock_price.py",
+        "requirements": ["yfinance==0.2.31", "pandas>=2.0"],
+        "requirements_file": "/workspace/output/requirements.txt",
+        "workspace_dir": "/workspace/output",
+        "venv_created": False,
+        "generation_status": "success",
+        "metadata": {
+            "complexity": "medium",
+            "domain": "finance",
+            "estimated_libraries": 2,
+            "generation_timestamp": "2026-03-10T14:30:00Z",
+        },
+    }
+
+    print("=" * 60)
+    print("HANDOFF VALIDATION TEST")
+    print("=" * 60)
+
+    try:
+        exec_ctx = process_handoff(example_generation_output)
+        print("\nExecution Context (Schema B):")
+        print(json.dumps(exec_ctx, indent=2))
+    except HandoffValidationError as e:
+        print(f"\nValidation FAILED: {e}")
+        print(
+            "(This is expected if /workspace/output/ "
+            "does not exist on this machine.)"
+        )

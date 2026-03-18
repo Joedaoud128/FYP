@@ -1,6 +1,30 @@
 """
+docker_executor.py
+==================
 Docker-based sandboxed execution engine for the AI Coding Agent.
-Replaces direct subprocess.run() with containerized execution.
+
+Architecture Position:
+    This module implements Layer 3 (Runtime Isolation) inside
+    Module 8 (Action Executor) of the shared execution pipeline:
+
+    Module 6 (Tool Selector) -> Module 7 (Policy Check) -> Module 8 (Action Executor)
+                                                            ^ DockerExecutor lives here
+
+    Both the Code Generation service and the Code Debugging service
+    use this same executor through the shared pipeline whenever they
+    need to run a script. The Security & Guardrails service (Module 7)
+    validates commands BEFORE they reach this executor.
+
+    The Orchestrator (Module 11) does NOT participate in this pipeline.
+    It operates at a higher level — managing the handoff between
+    services and enforcing termination rules (max 10 iterations,
+    same error 3x, 30-minute timeout). The Orchestrator never calls
+    the DockerExecutor directly.
+
+Three-Layer Security Architecture:
+    Layer 1: Orchestrator validates data at handoff boundary (V1-V7)
+    Layer 2: Policy Check validates commands in shared pipeline (Module 7)
+    Layer 3: DockerExecutor isolates runtime execution (this module)
 """
 
 import subprocess
@@ -16,7 +40,13 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ExecutionResult:
-    """Structured result from sandboxed execution."""
+    """
+    Structured result from sandboxed execution.
+    Consumed by Module 9 (Evaluation and Feedback) to determine
+    success or failure. Compatible with both the Code Generation
+    service's Phase 8 execution and the Code Debugging service's
+    iterative Execute-Analyze-Fix loop.
+    """
     return_code: int
     stdout: str
     stderr: str
@@ -26,22 +56,24 @@ class ExecutionResult:
 
 
 class DockerExecutor:
-    """Executes Python code inside Docker containers."""
+    """
+    Executes Python code inside Docker containers.
+    Sits inside Module 8 (Action Executor), called ONLY after
+    Module 7 (Policy Check) has approved the command. Both the
+    Code Generation and Code Debugging services use this executor
+    through the shared pipeline (Modules 6->7->8).
+    """
 
-    # These match your guardrails document specifications
-    DEFAULT_TIMEOUT = 30      # seconds per script
-    MAX_TIMEOUT = 300         # absolute maximum
-    MEMORY_LIMIT = "512m"     # 512MB RAM
-    CPU_LIMIT = "1"           # 1 CPU core
-    PID_LIMIT = "100"         # max 100 processes
-    DISK_LIMIT = "100m"       # 100MB writable space
+    DEFAULT_TIMEOUT = 30
+    MAX_TIMEOUT = 300
+    MEMORY_LIMIT = "512m"
+    CPU_LIMIT = "1"
+    PID_LIMIT = "100"
+    DISK_LIMIT = "100m"
     IMAGE_NAME = "agent-sandbox"
 
     def __init__(self, timeout: int = None):
-        self.timeout = min(
-            timeout or self.DEFAULT_TIMEOUT,
-            self.MAX_TIMEOUT
-        )
+        self.timeout = min(timeout or self.DEFAULT_TIMEOUT, self.MAX_TIMEOUT)
         self._verify_docker()
 
     def _verify_docker(self):
@@ -57,45 +89,33 @@ class DockerExecutor:
                     f"Run: docker build -t {self.IMAGE_NAME} ."
                 )
         except FileNotFoundError:
-            raise RuntimeError(
-                "Docker is not installed or not in PATH."
-            )
+            raise RuntimeError("Docker is not installed or not in PATH.")
 
     def execute(self, code: str) -> ExecutionResult:
         """
         Execute Python code in a sandboxed container.
-
-        Args:
-            code: The Python source code string to execute.
-
-        Returns:
-            ExecutionResult with return_code, stdout, stderr,
-            execution_time, and timed_out flag.
+        Called by Module 8 after Module 7 approval. Each execution
+        creates a fresh, ephemeral container destroyed after results.
         """
-        # --- Write code to a temporary file on the HOST ---
-        # This temp file is mounted read-only into the container.
         with tempfile.NamedTemporaryFile(
-            mode='w', suffix='.py',
-            dir='/tmp', delete=False
+            mode='w', suffix='.py', dir='/tmp', delete=False
         ) as tmp:
             tmp.write(code)
             tmp_path = tmp.name
 
         try:
-            # --- Build the docker run command ---
             cmd = [
                 "docker", "run",
-                "--rm",                    # auto-cleanup
-                "--network", "none",        # no internet
+                "--rm",
+                "--network", "none",
                 "--memory", self.MEMORY_LIMIT,
                 "--memory-swap", self.MEMORY_LIMIT,
                 "--cpus", self.CPU_LIMIT,
                 "--pids-limit", self.PID_LIMIT,
-                "--read-only",              # read-only filesystem
+                "--read-only",
                 "--tmpfs", f"/workspace:rw,noexec,size={self.DISK_LIMIT}",
-                "--cap-drop", "ALL",        # drop all capabilities
+                "--cap-drop", "ALL",
                 "--security-opt", "no-new-privileges",
-                # Mount the script read-only into the container
                 "-v", f"{tmp_path}:/sandbox/script.py:ro",
                 self.IMAGE_NAME,
                 "python3", "/sandbox/script.py"
@@ -104,60 +124,45 @@ class DockerExecutor:
             logger.info(f"Executing in container (timeout={self.timeout}s)")
             start_time = time.time()
 
-            # --- Run the container ---
             result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=self.timeout + 5  # +5s grace for Docker overhead
+                cmd, capture_output=True, text=True,
+                timeout=self.timeout + 5
             )
 
             execution_time = time.time() - start_time
-
             return ExecutionResult(
                 return_code=result.returncode,
-                stdout=result.stdout,
-                stderr=result.stderr,
-                execution_time=execution_time,
-                timed_out=False
+                stdout=result.stdout, stderr=result.stderr,
+                execution_time=execution_time, timed_out=False
             )
 
         except subprocess.TimeoutExpired:
             execution_time = time.time() - start_time
             logger.warning(f"Execution timed out after {self.timeout}s")
-
-            # Kill any lingering container
             self._force_cleanup()
-
             return ExecutionResult(
-                return_code=-1,
-                stdout="",
+                return_code=-1, stdout="",
                 stderr=f"TimeoutError: Execution exceeded {self.timeout}s",
                 execution_time=execution_time,
-                timed_out=True,
-                error_type="TimeoutError"
+                timed_out=True, error_type="TimeoutError"
             )
 
         finally:
-            # Always clean up the temp file
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
 
-    def execute_with_packages(
-        self, code: str, packages: list[str]
-    ) -> ExecutionResult:
+    def execute_with_packages(self, code: str, packages: list[str]) -> ExecutionResult:
         """
         Execute code after installing additional packages.
-        Used by the self-correction loop when ModuleNotFoundError
-        is detected and the fix is to pip install a library.
+        Used by the Code Debugging service's self-correction loop
+        when ModuleNotFoundError is detected. The packages list
+        often comes from Schema B's pending_installs field.
         """
-        # Prepend pip install commands to the script
         install_lines = []
         for pkg in packages:
             install_lines.append(
                 f"import subprocess; "
-                f"subprocess.run(['pip', 'install', '{pkg}'], "
-                f"capture_output=True)"
+                f"subprocess.run(['pip', 'install', '{pkg}'], capture_output=True)"
             )
         modified_code = "\n".join(install_lines) + "\n" + code
         return self.execute(modified_code)
@@ -166,9 +171,8 @@ class DockerExecutor:
         """Kill any running containers from our image."""
         try:
             subprocess.run(
-                ["docker", "ps", "-q", "--filter",
-                 f"ancestor={self.IMAGE_NAME}"],
+                ["docker", "ps", "-q", "--filter", f"ancestor={self.IMAGE_NAME}"],
                 capture_output=True, text=True, timeout=5
             )
         except Exception:
-            pass  # Best effort cleanup
+            pass
