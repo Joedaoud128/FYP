@@ -318,7 +318,6 @@ class GuardrailsEngine:
         self._resource_limits = g["resource_limits"]
 
         self._commands = self._config["commands"]
-        self._debug_error_map = self._config.get("debug_error_map", {})
         self._log_config = self._config.get("logging", {})
 
         self._path_validator = PathValidator(self._workspace_root)
@@ -339,20 +338,6 @@ class GuardrailsEngine:
     @property
     def resource_limits(self) -> dict:
         return dict(self._resource_limits)
-
-    def get_debug_commands(self, error_type: str) -> list[str] | str | None:
-        """Return the list of authorized command keys for a given error type.
-        Used by the debugging service's error classifier to know which
-        commands it should propose.
-
-        Returns:
-            list[str] of command keys, or "llm_guided" for OtherError,
-            or None if the error type is not in the map.
-        """
-        entry = self._debug_error_map.get(error_type)
-        if entry is None:
-            return None
-        return entry["authorized_commands"]
 
     # ── The core validate function ─────────────────────────────────────────
 

@@ -13,7 +13,7 @@
 #   2. path_validation – workspace scoping, traversal, and symlink rules
 #   3. token_validation – pre-tokenization scanner and expansion blocklist
 #   4. commands        – per-command whitelist with token-order templates
-#   5. debug_error_map – maps error types to their pre-authorized command sets
+#   5. logging         – structured log fields for PASS, REJECT, and BLOCK
 # ============================================================================
 
 
@@ -616,67 +616,7 @@ commands:
 
 
 # ---------------------------------------------------------------------------
-# 5. DEBUG ERROR MAP
-# ---------------------------------------------------------------------------
-# Maps Python error types to the pre-authorized commands the debugging
-# service's error classifier can invoke. Each entry uses command keys
-# from the 'commands' section above. The debug loop never needs to step
-# outside these sets.
-# ---------------------------------------------------------------------------
-
-debug_error_map:
-
-  ModuleNotFoundError:
-    description: "Missing Python dependency."
-    fix_type: "deterministic"
-    authorized_commands:
-      - "python_pip_show"       # check if package is installed
-      - "python_pip_list"       # inventory installed packages
-      - "python_pip_install"    # install the missing package
-
-  ImportError:
-    description: "Failed import (wrong name, circular, partial)."
-    fix_type: "deterministic"
-    authorized_commands:
-      - "python_pip_show"
-      - "python_pip_list"
-      - "python_pip_install"
-
-  SyntaxError:
-    description: "Invalid Python syntax."
-    fix_type: "deterministic"
-    authorized_commands:
-      - "python_py_compile"     # static syntax check
-      - "python_ruff_check"     # linter diagnostics
-
-  IndentationError:
-    description: "Incorrect indentation (subclass of SyntaxError)."
-    fix_type: "deterministic"
-    authorized_commands:
-      - "python_py_compile"
-      - "python_ruff_check"
-
-  FileNotFoundError:
-    description: "Expected file does not exist at the given path."
-    fix_type: "deterministic"
-    authorized_commands:
-      - "find"                  # locate the file
-      - "grep_recursive"       # search for references
-      - "ls"                   # list directory contents
-      - "stat"                 # inspect file metadata
-
-  OtherError:
-    description: "Any error not classified above."
-    fix_type: "probabilistic"
-    authorized_commands: "llm_guided"
-    note: >
-      The LLM Reasoning Engine generates a fix strategy.
-      Any commands it proposes still pass through this same
-      guardrails layer and must match a whitelisted template.
-
-
-# ---------------------------------------------------------------------------
-# 6. LOGGING
+# 5. LOGGING
 # ---------------------------------------------------------------------------
 logging:
 

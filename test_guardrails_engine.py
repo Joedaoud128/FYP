@@ -231,29 +231,6 @@ class TestBlocks(GuardrailsTestBase):
     def test_d9(self): self.assertEqual(self.engine.validate(self._req("grep $9 app.py"))["status"], "BLOCK")
 
 
-class TestDebugErrorMap(GuardrailsTestBase):
-    def test_module_not_found(self):
-        c = self.engine.get_debug_commands("ModuleNotFoundError")
-        self.assertIn("python_pip_install", c)
-        self.assertIn("python_pip_show", c)
-
-    def test_syntax_error(self):
-        c = self.engine.get_debug_commands("SyntaxError")
-        self.assertIn("python_py_compile", c)
-        self.assertIn("python_ruff_check", c)
-
-    def test_file_not_found(self):
-        c = self.engine.get_debug_commands("FileNotFoundError")
-        self.assertIn("find", c)
-        self.assertIn("ls", c)
-
-    def test_other(self):
-        self.assertEqual(self.engine.get_debug_commands("OtherError"), "llm_guided")
-
-    def test_unknown(self):
-        self.assertIsNone(self.engine.get_debug_commands("SomeRandom"))
-
-
 class TestCallerService(GuardrailsTestBase):
     def test_same_for_both(self):
         r1 = self.engine.validate(self._req("python -m pip install requests", "generation"))
