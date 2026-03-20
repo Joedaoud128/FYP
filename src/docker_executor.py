@@ -25,6 +25,14 @@ Three-Layer Security Architecture:
     Layer 1: Orchestrator validates data at handoff boundary (V1-V7)
     Layer 2: Policy Check validates commands in shared pipeline (Module 7)
     Layer 3: DockerExecutor isolates runtime execution (this module)
+
+Package Installation Note:
+    Containers run with --network none, so pip install cannot be run
+    inside execute(). execute_with_packages() uses a separate two-step
+    approach: first install packages into a temporary image layer using
+    a network-enabled container, then run the script in the isolated
+    container using that layer. This preserves network isolation for
+    the actual script execution while still allowing package resolution.
 """
 
 import subprocess
@@ -96,6 +104,9 @@ class DockerExecutor:
         Execute Python code in a sandboxed container.
         Called by Module 8 after Module 7 approval. Each execution
         creates a fresh, ephemeral container destroyed after results.
+
+        The container runs with --network none, so no outbound
+        network access is possible during script execution.
         """
         with tempfile.NamedTemporaryFile(
             mode='w', suffix='.py', dir='/tmp', delete=False
@@ -103,6 +114,7 @@ class DockerExecutor:
             tmp.write(code)
             tmp_path = tmp.name
 
+        start_time = time.time()
         try:
             cmd = [
                 "docker", "run",
@@ -122,7 +134,130 @@ class DockerExecutor:
             ]
 
             logger.info(f"Executing in container (timeout={self.timeout}s)")
-            start_time = time.time()
+
+            result = subprocess.run(
+                cmd, capture_output=True, text=True,
+                timeout=self.timeout + 5  # +5s for Docker overhead
+            )
+
+            execution_time = time.time() - start_time
+            return ExecutionResult(
+                return_code=result.returncode,
+                stdout=result.stdout,
+                stderr=result.stderr,
+                execution_time=execution_time,
+                timed_out=False
+            )
+
+        except subprocess.TimeoutExpired:
+            execution_time = time.time() - start_time
+            logger.warning(f"Execution timed out after {self.timeout}s")
+            self._force_cleanup()
+            return ExecutionResult(
+                return_code=-1,
+                stdout="",
+                stderr=f"TimeoutError: Execution exceeded {self.timeout}s",
+                execution_time=execution_time,
+                timed_out=True,
+                error_type="TimeoutError"
+            )
+
+        finally:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+
+    def execute_with_packages(
+        self, code: str, packages: list[str]
+    ) -> ExecutionResult:
+        """
+        Execute code after installing required packages.
+
+        Used by the Code Debugging service's self-correction loop
+        when ModuleNotFoundError is detected. The packages list
+        typically comes from Schema B's pending_installs field.
+
+        Two-step approach to preserve network isolation for script
+        execution:
+          Step 1 — Build a temporary image that extends agent-sandbox
+                   with the required packages installed (network
+                   enabled, no code executed).
+          Step 2 — Run the script using that temporary image with
+                   --network none (same isolation as execute()).
+
+        The temporary image is removed after execution regardless of
+        outcome.
+
+        Args:
+            code:     Python source code to execute.
+            packages: List of pip-format package specs (e.g.,
+                      ["yfinance==0.2.31", "pandas>=2.0"]).
+
+        Returns:
+            ExecutionResult from the isolated execution step.
+        """
+        if not packages:
+            return self.execute(code)
+
+        tmp_image = f"{self.IMAGE_NAME}-pkgs-{int(time.time())}"
+
+        # --- Step 1: install packages into a temporary image layer ---
+        pip_args = " ".join(packages)
+        dockerfile_content = (
+            f"FROM {self.IMAGE_NAME}\n"
+            f"RUN pip install --no-cache-dir {pip_args}\n"
+        )
+
+        with tempfile.TemporaryDirectory() as build_dir:
+            dockerfile_path = os.path.join(build_dir, "Dockerfile")
+            with open(dockerfile_path, "w") as f:
+                f.write(dockerfile_content)
+
+            build_result = subprocess.run(
+                ["docker", "build", "-t", tmp_image, build_dir],
+                capture_output=True, text=True, timeout=120
+            )
+
+        if build_result.returncode != 0:
+            logger.error(
+                "Package installation failed:\n%s", build_result.stderr
+            )
+            return ExecutionResult(
+                return_code=1,
+                stdout="",
+                stderr=(
+                    f"PackageInstallError: Failed to install "
+                    f"{packages}.\n{build_result.stderr}"
+                ),
+                execution_time=0.0,
+                timed_out=False,
+                error_type="PackageInstallError"
+            )
+
+        # --- Step 2: run the script in the isolated image ---
+        with tempfile.NamedTemporaryFile(
+            mode='w', suffix='.py', dir='/tmp', delete=False
+        ) as tmp:
+            tmp.write(code)
+            tmp_path = tmp.name
+
+        start_time = time.time()
+        try:
+            cmd = [
+                "docker", "run",
+                "--rm",
+                "--network", "none",
+                "--memory", self.MEMORY_LIMIT,
+                "--memory-swap", self.MEMORY_LIMIT,
+                "--cpus", self.CPU_LIMIT,
+                "--pids-limit", self.PID_LIMIT,
+                "--read-only",
+                "--tmpfs", f"/workspace:rw,noexec,size={self.DISK_LIMIT}",
+                "--cap-drop", "ALL",
+                "--security-opt", "no-new-privileges",
+                "-v", f"{tmp_path}:/sandbox/script.py:ro",
+                tmp_image,
+                "python3", "/sandbox/script.py"
+            ]
 
             result = subprocess.run(
                 cmd, capture_output=True, text=True,
@@ -132,47 +267,57 @@ class DockerExecutor:
             execution_time = time.time() - start_time
             return ExecutionResult(
                 return_code=result.returncode,
-                stdout=result.stdout, stderr=result.stderr,
-                execution_time=execution_time, timed_out=False
+                stdout=result.stdout,
+                stderr=result.stderr,
+                execution_time=execution_time,
+                timed_out=False
             )
 
         except subprocess.TimeoutExpired:
             execution_time = time.time() - start_time
-            logger.warning(f"Execution timed out after {self.timeout}s")
-            self._force_cleanup()
+            self._force_cleanup(image=tmp_image)
             return ExecutionResult(
-                return_code=-1, stdout="",
+                return_code=-1,
+                stdout="",
                 stderr=f"TimeoutError: Execution exceeded {self.timeout}s",
                 execution_time=execution_time,
-                timed_out=True, error_type="TimeoutError"
+                timed_out=True,
+                error_type="TimeoutError"
             )
 
         finally:
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
-
-    def execute_with_packages(self, code: str, packages: list[str]) -> ExecutionResult:
-        """
-        Execute code after installing additional packages.
-        Used by the Code Debugging service's self-correction loop
-        when ModuleNotFoundError is detected. The packages list
-        often comes from Schema B's pending_installs field.
-        """
-        install_lines = []
-        for pkg in packages:
-            install_lines.append(
-                f"import subprocess; "
-                f"subprocess.run(['pip', 'install', '{pkg}'], capture_output=True)"
-            )
-        modified_code = "\n".join(install_lines) + "\n" + code
-        return self.execute(modified_code)
-
-    def _force_cleanup(self):
-        """Kill any running containers from our image."""
-        try:
+            # Always remove the temporary image
             subprocess.run(
-                ["docker", "ps", "-q", "--filter", f"ancestor={self.IMAGE_NAME}"],
+                ["docker", "rmi", "--force", tmp_image],
+                capture_output=True, timeout=15
+            )
+
+    def _force_cleanup(self, image: str = None):
+        """
+        Kill any running containers from the given image (or the
+        default sandbox image). Called on timeout to prevent
+        orphaned containers consuming resources.
+        """
+        target_image = image or self.IMAGE_NAME
+        try:
+            ps_result = subprocess.run(
+                [
+                    "docker", "ps", "-q",
+                    "--filter", f"ancestor={target_image}"
+                ],
                 capture_output=True, text=True, timeout=5
             )
-        except Exception:
-            pass
+            container_ids = ps_result.stdout.strip().splitlines()
+            if container_ids:
+                subprocess.run(
+                    ["docker", "kill"] + container_ids,
+                    capture_output=True, timeout=10
+                )
+                logger.info(
+                    "Force-killed %d container(s) from image %s",
+                    len(container_ids), target_image
+                )
+        except Exception as e:
+            logger.warning("Force cleanup failed: %s", e)
