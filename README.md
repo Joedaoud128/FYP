@@ -33,6 +33,14 @@ When enabled, fallback accepts unrestricted plan payloads:
 - `commands`: arbitrary shell command argv lists or shell strings
 - `file_writes`: arbitrary file path + full content writes
 
+Guardrails integration follows the shared policy contract from [Guardrails_Integration_Guide.md](Guardrails_Integration_Guide.md):
+
+- Deterministic path bypasses guardrails (trusted pre-approved actions).
+- Probabilistic path must call guardrails for every LLM-proposed command before execution.
+- Only `PASS` commands are executed; `REJECT` and `BLOCK` stop fallback command execution.
+
+The guardrails engine used by fallback commands is loaded from [FYP-guardrails-module/guardrails_engine.py](FYP-guardrails-module/guardrails_engine.py) with rules from [FYP-guardrails-module/guardrails_config.yaml](FYP-guardrails-module/guardrails_config.yaml).
+
 Fallback is recorded as `llm_unrestricted_plan` in the action journal.
 
 Guardrail hardening for unrestricted fallback is intentionally out of scope for this Phase 4/5 slice.

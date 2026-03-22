@@ -57,6 +57,17 @@ class TestUnrestrictedLlmFallbackExecutor(unittest.TestCase):
             self.assertEqual(result.command, ["internal", "llm_fallback", "file_writes_only"])
             self.assertEqual(target.read_text(encoding="utf-8"), "x=1\n")
 
+    def test_blocks_non_whitelisted_llm_command(self) -> None:
+        engine = FakeExecutionEngine()
+        executor = UnrestrictedLlmFallbackExecutor(engine)
+        plan = LlmFallbackPlan(commands=[LlmShellCommand(command=["curl", "http://example.com"])])
+
+        result = executor.execute_plan(plan)
+
+        self.assertEqual(result.exit_code, 1)
+        self.assertIn("Guardrails blocked LLM command", result.stderr)
+        self.assertEqual(engine.commands, [])
+
 
 if __name__ == "__main__":
     unittest.main()

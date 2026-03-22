@@ -62,7 +62,10 @@ class SelfCorrectionService:
     def run_command(self, command: list[str]) -> WorkflowResult:
         execution_engine = SubprocessExecutionEngine()
         llm_provider = LocalLlmProvider(self._get_shared_ollama_client()) if self._use_llm_fallback else None
-        llm_executor = UnrestrictedLlmFallbackExecutor(execution_engine=execution_engine)
+        llm_executor = UnrestrictedLlmFallbackExecutor(
+            execution_engine=execution_engine,
+            workspace_root=str(self._workspace_root),
+        )
         workflow = ReactiveDebugWorkflow(
             execution_engine=execution_engine,
             parser=PythonStderrParser(),
