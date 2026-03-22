@@ -1,0 +1,54 @@
+# ── Python ────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+
+# ── Virtual Environments ──────────────────────────────────
+.venv/
+venv/
+ENV/
+env/
+
+# ── Generated Output (created at runtime) ─────────────────
+generated_code/
+*.pyc
+
+# ── IDE / Editor ──────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ── Docker ────────────────────────────────────────────────
+# Keep the Dockerfile, ignore runtime artifacts
+agent-sandbox-pkgs-*/
+.docker/
+
+# ── Logs ──────────────────────────────────────────────────
+*.log
+logs/
+
+# ── OS ────────────────────────────────────────────────────
+.DS_Store
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+
+# ── Temporary files ───────────────────────────────────────
+/tmp/
+*.tmp
+*.bak
+
+# ── Secrets (never commit) ────────────────────────────────
+.env
+*.key
+*.pem

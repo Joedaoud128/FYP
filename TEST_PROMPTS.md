@@ -1,0 +1,1 @@
+cd /home/maria/ai-coding-agent/src/orchestrator && timeout 120 python3 demo_e2e.py --mode both --prompt "Create a Python script that analyzes numbers and calculates: mean, median, std, percentile ranks, outliers using IQR. Use numpy and scipy." 2>&1 | tail -60
