@@ -14,10 +14,10 @@ from phase4.app.service import SelfCorrectionService
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="ESIB AI Agent standalone debug mode.")
-    parser.add_argument("--fix", dest="target_file", required=True, help="Target Python file to fix.")
+    parser = argparse.ArgumentParser(description="Phase 5 debug entrypoint for Phase 4/5 self-correction workflow.")
+    parser.add_argument("--fix", dest="target_file", required=True, help="Python file to execute and auto-fix.")
     parser.add_argument("--python", dest="python_executable", default=sys.executable, help="Python executable path.")
-    parser.add_argument("--max-iterations", type=int, default=5)
+    parser.add_argument("--max-iterations", type=int, default=3)
     parser.add_argument("--timeout", type=int, default=30)
     parser.add_argument("--ollama-url", default="http://localhost:11434")
     parser.add_argument("--ollama-model", default="llama3.2")
@@ -40,7 +40,16 @@ def main() -> int:
     )
 
     if args.check_runtime and not service.is_runtime_healthy():
-        print(json.dumps({"mode": "debug", "runtime_healthy": False, "message": "Local Ollama runtime is unavailable."}, indent=2))
+        print(
+            json.dumps(
+                {
+                    "mode": "debug",
+                    "runtime_healthy": False,
+                    "message": "Local Ollama runtime is unavailable.",
+                },
+                indent=2,
+            )
+        )
         return 2
 
     result = service.run_target_file(args.target_file)
@@ -50,7 +59,6 @@ def main() -> int:
         json.dumps(
             {
                 "mode": "debug",
-                "target_file": str(Path(args.target_file).resolve()),
                 "success": outcome.success,
                 "attempts": outcome.attempts,
                 "failure_reason": outcome.failure_reason,

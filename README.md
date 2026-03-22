@@ -1,127 +1,65 @@
-# Phase 4 - Reactive Code Debugging Workflow
+# Phase 4/5 - Reactive Debug Workflow
 
-This implementation delivers the **Phase 4 deterministic error-classification loop** from the workflow diagram, focused on the missing-package path:
+This implementation delivers a deterministic-first remediation loop for Python execution failures, with optional unrestricted LLM fallback when deterministic remediation reaches a terminal state.
 
-- Execute Python command in sandboxed process
-- Capture stderr and parse traceback/error line
-- Classify deterministic error types
-- Apply policy gates (confidence + idempotency)
-- Plan and auto-run safe corrective actions
-- Re-run command until success or max iterations
-- Success requires both `exit_code == 0` and empty `stderr`
-- If deterministic remediation cannot continue, automatically escalate to local LLM fallback
+## Behavior contract
 
-## Scope implemented
+1. Run target command and parse stderr.
+2. Classify deterministic Python error types.
+3. Apply confidence and idempotency policy gates.
+4. Execute deterministic corrective action when available.
+5. If deterministic remediation cannot continue (for example confidence deny, no action, repeated action, or deterministic action failure), optionally hand off to unrestricted LLM fallback.
+6. Re-run command until success or max iterations.
 
-- Deterministic classifier supports:
+Success is considered achieved when the command exits with code `0` and stderr is empty.
+
+## Deterministic remediation scope
+
+- Supported deterministic classes:
   - `ModuleNotFoundError`
-  - `ImportError` with `No module named ...`
-  - `SyntaxError`, `IndentationError`
+  - `ImportError` containing `No module named ...`
+  - `SyntaxError`
+  - `IndentationError`
   - `FileNotFoundError`
-- Deterministic corrective actions now cover missing modules and indentation normalization.
-- `FileNotFoundError` is denied by default (no auto-create unless explicit allowlist policy).
+- Supported deterministic actions:
+  - `python -m pip install <module>`
+  - indentation normalization with compile validation + rollback
+  - optional allowlisted missing-file creation
 
-## Deterministic corrective branches implemented
+## LLM fallback scope
 
-- `ModuleNotFoundError` / `ImportError` (missing module):
-  - Action: `python -m pip install <module>`
-- `SyntaxError` / `IndentationError` with parseable file + line:
-  - Action: normalize indentation on the failing line (tabs to spaces, whitespace normalization)
-  - Validation: `py_compile` on touched file; rollback on failure
-- `FileNotFoundError` with parseable path:
-  - Default action: deny auto-remediation (prevents unsafe file fabrication)
-  - Optional action: create missing file only when path is explicitly allowlisted
+When enabled, fallback accepts unrestricted plan payloads:
 
-## Deterministic safety controls
+- `commands`: arbitrary shell command argv lists or shell strings
+- `file_writes`: arbitrary file path + full content writes
 
-- Per-rule confidence thresholds (`RuleId`-based)
-- Idempotency policy blocks repeated `(error fingerprint, action fingerprint)` loops
-- Persistent action journal in `.phase4/action_journal.jsonl`
-- Workspace-bounded path resolution for file actions
+Fallback is recorded as `llm_unrestricted_plan` in the action journal.
 
-## Shared local model runtime
+Guardrail hardening for unrestricted fallback is intentionally out of scope for this Phase 4/5 slice.
 
-- Phase 4 and Phase 5 share one local Ollama runtime client instance
-- Logical debug session:
-  - `phase4_debug_session`
-- Concurrency is controlled with an in-process semaphore
-- Requests use retry with backoff and optional runtime health checks
+## Runtime and journaling
 
-## LLM fallback behavior
+- Shared local Ollama runtime client/session manager for fallback provider calls
+- Persistent JSONL journal at `.phase4/action_journal.jsonl`
 
-- Deterministic-first strategy is preserved
-- LLM fallback is invoked only after deterministic terminal reasons, such as:
-  - confidence gate denial
-  - no deterministic action available
-  - repeated action blocked by idempotency
-  - deterministic corrective action execution failure
-- Deterministic actions remain template-based:
-  - `pip_install`
-  - `normalize_indentation`
-  - `replace_line`
-- After deterministic terminal failure, fallback handoff is unrestricted for this phase:
-  - LLM may propose arbitrary shell commands
-  - LLM may propose arbitrary file writes
-  - Guardrails for fallback are intentionally out of scope in this slice and are planned for a later microservice integration
+## Entrypoints
 
-## Project structure
+- Phase 4 bridge:
 
-- `src/phase4/domain`: models and interfaces
-- `src/phase4/parsing`: stderr parser
-- `src/phase4/classifier`: deterministic classifier
-- `src/phase4/actions`: action planner and guarded executor
-- `src/phase4/runtime`: subprocess execution adapter
-- `src/phase4/llm`: local LLM provider for fallback actions
-- `src/phase4/app`: shared composition service for bridge/debug mode and runtime reuse
-- `src/phase4/workflow`: reactive loop orchestrator
-- `demo/yfinance_missing_demo.py`: end-to-end demo using isolated venv
-- `tests/unit`: parser + classifier/planner tests
-- `tests/integration`: workflow test with fake engine
+```powershell
+py -3 scripts/phase4_bridge.py <generated_file.py> --python <python_executable>
+```
+
+- Phase 5 debug mode:
+
+```powershell
+py -3 ESIBaiAgent.py --fix <target_file.py> --python <python_executable>
+```
+
+Both entrypoints emit JSON including `llm_fallback_used`.
 
 ## Run tests
 
 ```powershell
 py -3 -m unittest discover -s tests -p "test_*.py" -v
-```
-
-## Run yfinance missing-package demo
-
-```powershell
-py -3 demo/yfinance_missing_demo.py
-```
-
-Demo behavior:
-1. Creates an isolated temporary venv
-2. Runs `import yfinance` in that venv (first run should fail)
-3. Classifier detects missing module and plans `pip install yfinance`
-4. Applies fix and re-runs import
-5. Prints JSON summary with attempts, decision path, and outcome
-6. Writes deterministic journal entries to `.phase4/action_journal.jsonl`
-
-## Phase 4 bridge entrypoint
-
-Use this bridge to debug a Python file produced by any upstream service:
-
-```powershell
-py -3 scripts/phase4_bridge.py <generated_file.py>
-```
-
-Optional runtime flags:
-
-```powershell
-py -3 scripts/phase4_bridge.py <generated_file.py> --ollama-url http://localhost:11434 --ollama-model llama3.2 --check-runtime
-```
-
-## Phase 5 standalone debug mode
-
-Run standalone reactive debugger on any target file:
-
-```powershell
-py -3 ESIBaiAgent.py --fix <target_file.py>
-```
-
-Optional runtime flags:
-
-```powershell
-py -3 ESIBaiAgent.py --fix <target_file.py> --ollama-url http://localhost:11434 --ollama-model llama3.2 --check-runtime
 ```
