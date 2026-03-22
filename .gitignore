@@ -1,0 +1,11 @@
+# Exclude folders
+models/
+FYP-guardrails-module/
+
+# Exclude root-level files only (using leading slash) except those explicitly mentioned
+/*.py
+/*.docx
+/*.docx.md
+/*.drawio
+!ESIBaiAgent.py
+!README.md
