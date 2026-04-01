@@ -1,0 +1,1057 @@
+"""
+Phase 3 - Proactive Code Generator
+Powered by qwen2.5-coder:7b running locally via Ollama.
+
+6-Stage Pipeline:
+    Stage 1:  Accept user natural language prompt
+    Stage 2:  Extract environment info (Python, OS, packages, network, disk)
+    Stage 3:  Requirement Parser & Intent Classifier + Complexity Threshold
+    Stage 4:  Multi-Step Agentic Planner (search_docs, write_file, run_sandbox, install_package)
+    Stage 5:  Library Identification & Validation (import check + PyPI API verification)
+    Stage 6:  Code Generator (comprehensive context prompt)
+
+Guardrails Integration (Module 7 - Policy Check):
+    Every command the LLM proposes during Stage 4 (planning) and Stage 5 (pip installs)
+    is validated through GuardrailsEngine before execution.
+    Deterministic commands (known pip installs from Stage 5) bypass guardrails per design.
+
+Requirements (install once):
+    1. Install Ollama:        curl -fsSL https://ollama.com/install.sh | sh
+    2. Pull the model:        ollama pull qwen2.5-coder:7b  (or qwen2.5:3b for lower bandwidth)
+    3. Install guardrails:    pip install pyyaml
+    4. Place guardrails_engine.py and guardrails_config.yaml in the same directory.
+
+Usage:
+    python generation.py "Write a script that reads a CSV and plots a bar chart"
+    python generation.py --complexity-threshold 7 "Build a REST API with Flask"
+"""
+
+import ast
+import json
+import os
+import platform
+import shutil
+import socket
+import subprocess
+import sys
+import textwrap
+import logging
+import urllib.request
+import urllib.error
+from datetime import datetime
+from pathlib import Path
+
+
+# ---------------------------------------------------------------------------
+# Guardrails Integration (Module 7)
+# ---------------------------------------------------------------------------
+
+def _load_guardrails():
+    """
+    Load GuardrailsEngine if guardrails_engine.py is available.
+    Returns the engine instance or None if not available.
+    Failing to load guardrails is non-fatal — it logs a warning.
+    """
+    try:
+        from guardrails_engine import GuardrailsEngine
+        # Look for config in the guardrails directory relative to this file
+        here = os.path.dirname(os.path.abspath(__file__))
+        guardrails_dir = os.path.abspath(os.path.join(here, "..", "guardrails"))
+        cfg_path = os.path.join(guardrails_dir, "guardrails_config.yaml")
+        engine = GuardrailsEngine(cfg_path)
+        print("[Guardrails] Module 7 loaded successfully.")
+        return engine
+    except ImportError:
+        print("[Guardrails] WARNING: guardrails_engine.py not found. "
+              "LLM-proposed commands will NOT be validated.")
+        return None
+    except Exception as e:
+        print(f"[Guardrails] WARNING: Failed to load engine: {e}. "
+              "LLM-proposed commands will NOT be validated.")
+        return None
+
+
+def _validate_and_run(engine, raw_command: str, working_dir: str) -> tuple[bool, list, str]:
+    """
+    Validate a raw command string through the guardrails engine.
+    Returns (allowed, token_array, reason).
+
+    Per Elise's integration guide:
+    - PASS   → forward token_array to Action Executor (Module 8)
+    - REJECT → feed reason back to Reasoning Engine (Module 4)
+    - BLOCK  → non-deterministic variable expansion, feed back to Reasoning Engine
+
+    Args:
+        engine:      GuardrailsEngine instance (or None if unavailable)
+        raw_command: The full command string as the LLM produced it
+        working_dir: Current workspace directory
+
+    Returns:
+        (True, token_array, "") on PASS
+        (False, [], reason)    on REJECT or BLOCK
+    """
+    if engine is None:
+        # Guardrails not available — split command and allow through with warning
+        print(f"[Guardrails] BYPASSED (engine unavailable): {raw_command}")
+        return True, raw_command.split(), ""
+
+    response = engine.validate({
+        "caller_service": "generation",
+        "raw_command": raw_command,
+        "working_dir": working_dir,
+    })
+
+    status = response.get("status", "REJECT")
+
+    if status == "PASS":
+        return True, response.get("token_array", []), ""
+    else:
+        reason = response.get("reason", "Command rejected by guardrails")
+        rule = response.get("failing_rule_id", "unknown")
+        print(f"[Guardrails] {status}: {raw_command} | Rule: {rule} | {reason}")
+        return False, [], f"{status}: {reason} (rule: {rule})"
+
+
+# ---------------------------------------------------------------------------
+# LLM Client - wraps qwen2.5-coder:7b via Ollama local REST API
+# ---------------------------------------------------------------------------
+
+class QwenCoderClient:
+    """
+    Calls Ollama's local REST API (http://localhost:11434).
+    Ollama runs as a background service and manages GPU acceleration automatically.
+    Model: qwen2.5-coder:7b  (pull with: ollama pull qwen2.5-coder:7b)
+    """
+
+    OLLAMA_BASE = "http://localhost:11434"
+    OLLAMA_CHAT = f"{OLLAMA_BASE}/api/chat"
+    MODEL_NAME = "qwen2.5-coder:7b"
+
+    def __init__(self, max_new_tokens: int = 2048, temperature: float = 0.2):
+        self.max_new_tokens = max_new_tokens
+        self.temperature = temperature
+        self._check_ollama()
+
+    def _check_ollama(self):
+        """Verify Ollama is running and the required model is pulled."""
+        try:
+            # Use curl instead of urllib as urllib has issues with SSH tunnels
+            result = subprocess.run(
+                ["curl", "-s", f"{self.OLLAMA_BASE}/api/tags"],
+                capture_output=True, text=True, timeout=10
+            )
+            data = json.loads(result.stdout)
+            model_names = [m["name"] for m in data.get("models", [])]
+            base_name = self.MODEL_NAME.split(":")[0]
+            found = any(base_name in m for m in model_names)
+            if found:
+                print(f"[LLM] Ollama ready - model '{self.MODEL_NAME}' available")
+            else:
+                print(f"[LLM] WARNING: model '{self.MODEL_NAME}' not found in Ollama.")
+                print(f"       Available models: {model_names}")
+                print(f"       Run:  ollama pull {self.MODEL_NAME}")
+        except OSError:
+            print("[LLM] ERROR: Cannot connect to Ollama at localhost:11434")
+            print("      Start it with:  ollama serve")
+            sys.exit(1)
+
+    def chat(self, system_prompt: str, user_message: str) -> str:
+        """Send a chat-style request to Ollama and return the model reply."""
+        payload = json.dumps({
+            "model": self.MODEL_NAME,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user",   "content": user_message},
+            ],
+            "stream": False,
+            "options": {
+                "temperature": self.temperature,
+                "num_predict": self.max_new_tokens,
+            },
+        })
+
+        result = subprocess.run(
+            ["curl", "-s", "-X", "POST", self.OLLAMA_CHAT,
+             "-H", "Content-Type: application/json",
+             "-d", payload,
+             "--max-time", "60"],
+            capture_output=True, text=True, timeout=65
+        )
+        data = json.loads(result.stdout)
+        return data["message"]["content"].strip()
+
+
+# ---------------------------------------------------------------------------
+# Phase-3 Proactive Code Generator (6-Stage Pipeline)
+# ---------------------------------------------------------------------------
+
+class ProactiveCodeGenerator:
+    """
+    Orchestrates code generation through a 6-stage pipeline.
+    Integrates GuardrailsEngine (Module 7) for LLM-proposed commands.
+    Execution is handled by the Orchestrator via DockerExecutor (Module 8).
+    """
+
+    COMPLEXITY_THRESHOLD = 8
+    MAX_STAGE6_REGEN_ATTEMPTS = 3
+    STAGE5_INSTALL_TIMEOUT = 180
+    OUTPUT_DIR = "generated_code"
+    MIN_STAGE6_CODE_LINES = 6
+
+    def __init__(self, llm_client: QwenCoderClient | None = None):
+        self.llm: QwenCoderClient = llm_client or QwenCoderClient()
+        # Load guardrails engine once at init — stateless, reused for all commands
+        self.guardrails = _load_guardrails()
+        self._working_dir = str(Path(__file__).parent / self.OUTPUT_DIR)
+
+    # ===================================================================
+    # UTILITY METHODS FOR CODE ANALYSIS
+    # ===================================================================
+
+    @staticmethod
+    def _extract_function_names(code: str) -> list[str]:
+        """
+        Extract all function names defined in the generated code.
+        Returns a list of function names in order of definition.
+        """
+        try:
+            tree = ast.parse(code)
+            functions = []
+            for node in ast.walk(tree):
+                if isinstance(node, ast.FunctionDef):
+                    functions.append(node.name)
+            return functions
+        except SyntaxError:
+            return []
+
+    @staticmethod
+    def _extract_class_names(code: str) -> list[str]:
+        """
+        Extract all class names defined in the generated code.
+        Returns a list of class names in order of definition.
+        """
+        try:
+            tree = ast.parse(code)
+            classes = []
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ClassDef):
+                    classes.append(node.name)
+            return classes
+        except SyntaxError:
+            return []
+
+    def _derive_filename_from_code(self, code: str, user_prompt: str) -> str:
+        """
+        Intelligently derive a filename from the generated code.
+        Priority:
+            1. First function name (if exists)
+            2. First class name (if exists)
+            3. Sanitized user prompt
+            4. Default to 'generated_script'
+        """
+        # Try to extract function names
+        functions = self._extract_function_names(code)
+        if functions and functions[0] != "main":
+            # Use first non-main function
+            for func in functions:
+                if func != "main":
+                    return f"{func}.py"
+        
+        # Try class names
+        classes = self._extract_class_names(code)
+        if classes:
+            return f"{classes[0]}.py"
+        
+        # Fallback: sanitize user prompt
+        if user_prompt:
+            # Take first few words and convert to valid filename
+            words = user_prompt.lower().split()[:3]
+            sanitized = "_".join(word.strip('.,!?;:') for word in words if word.isalnum() or word[0].isalnum())
+            if sanitized:
+                return f"{sanitized}.py"
+        
+        return "generated_script.py"
+
+    # ===================================================================
+    # PUBLIC ENTRY POINT
+    # ===================================================================
+
+
+    def generate_from_prompt(self, user_prompt: str) -> dict:
+        """
+        Main orchestrator — runs the 6-stage generation pipeline.
+
+        Returns a dict with:
+            status:       'success' or 'error'
+            file_path:    absolute path to the generated script (on success)
+            code:         the generated source code string (on success)
+            requirements: list of pip packages identified in Stage 3
+            task_type:    task classification from Stage 3
+            complexity:   complexity level 1-10 from Stage 3
+            stage:        last stage reached
+            error:        error message (on failure)
+
+        NOTE: This function does NOT execute the script.
+        Execution is the Orchestrator's responsibility via DockerExecutor.
+        """
+        # ----- Stage 1: Accept user input -----
+        prompt_preview = self._format_prompt_preview(user_prompt)
+        print(f"\n{'='*60}")
+        print(f"[Stage 1] Received prompt ({len(user_prompt)} chars): {prompt_preview}")
+        print(f"{'='*60}")
+
+        # ----- Stage 2: Extract environment info -----
+        env_info = self._stage2_extract_environment()
+        print(f"[Stage 2] Environment collected:")
+        print(f"          Python {env_info['python_version']} | {env_info['os']} {env_info['arch']}")
+        print(f"          Packages: {env_info['installed_packages_count']} installed")
+        print(f"          Network: {'online' if env_info['network_available'] else 'OFFLINE'}")
+        print(f"          Disk free: {env_info['disk_free_gb']:.1f} GB")
+
+        # ----- Stage 3: Parse requirements + Complexity Threshold -----
+        requirements = self._stage3_parse_requirements(user_prompt, env_info)
+        requirements = self._stage3_apply_complexity_heuristics(requirements, user_prompt)
+
+        if requirements.get("status") == "exit":
+            print(f"[Stage 3] EXITING: {requirements['message']}")
+            return {"status": "error", "stage": 3, "error": requirements["message"]}
+
+        complexity = requirements.get("complexity_level", 5)
+        if complexity > self.COMPLEXITY_THRESHOLD:
+            msg = (
+                f"Task complexity ({complexity}/10) exceeds threshold "
+                f"({self.COMPLEXITY_THRESHOLD}/10). Please break this into "
+                f"smaller sub-tasks and re-submit each part individually."
+            )
+            print(f"[Stage 3] COMPLEXITY THRESHOLD EXCEEDED: {msg}")
+            return {"status": "error", "stage": 3, "error": msg, "requirements": requirements}
+
+        identified_libraries = requirements.get("libraries", [])
+        print(f"[Stage 3] Task type: {requirements.get('task_type', 'general')}")
+        print(f"          Complexity: {complexity}/10 (threshold: {self.COMPLEXITY_THRESHOLD})")
+        print(f"          Libraries: {identified_libraries}")
+        print(f"          Steps: {requirements.get('estimated_steps', 'N/A')}")
+        description = requirements.get('description', 'N/A')
+        print(f"          Description: {self._safe_console_text(description)}")
+        if requirements.get("_complexity_reason"):
+            print(f"          Complexity heuristic: {requirements['_complexity_reason']}")
+
+        # ----- Stage 4: Multi-Step Agentic Planner -----
+        # LLM proposes a plan — guardrails validate each proposed command
+        plan = self._stage4_create_plan(requirements, env_info)
+        print(f"[Stage 4] Agentic plan created with {len(plan)} step(s):")
+        for step in plan:
+            print(f"          {step}")
+
+        # ----- Stage 5: Library Identification & Validation -----
+        # pip install commands are DETERMINISTIC (not LLM-proposed) — bypass guardrails per design
+        library_status = self._stage5_validate_libraries(identified_libraries)
+        print(f"[Stage 5] Library validation complete:")
+        for lib, status in library_status.items():
+            print(f"          {lib}: {status}")
+
+        # ----- Stage 6: Code Generator -----
+        code = self._stage6_generate_code(
+            user_prompt, requirements, env_info, plan, library_status
+        )
+        print(f"[Stage 6] Code generated ({len(code)} chars)")
+
+        # Persist the artifact with intelligent filename derivation
+        file_path = self._persist_stage6_artifact(code, user_prompt)
+        print(f"[Stage 6] Code saved to: {file_path}")
+        
+        # Extract function/class names for reference
+        functions = self._extract_function_names(code)
+        classes = self._extract_class_names(code)
+
+        return {
+            "status": "success",
+            "stage": 6,
+            "file_path": file_path,
+            "code": code,
+            "requirements": identified_libraries,
+            "task_type": requirements.get("task_type", "general"),
+            "complexity": complexity,
+            "description": requirements.get("description", user_prompt),
+            "functions": functions,
+            "classes": classes,
+        }
+
+    def _persist_stage6_artifact(self, code: str, user_prompt: str) -> str:
+        """
+        Persist a Python artifact with intelligent filename derivation.
+        Filename is derived from:
+            1. First non-main function name
+            2. First class name
+            3. Sanitized user prompt
+            4. Default to 'generated_script'
+        
+        Returns the path to the saved file.
+        """
+        try:
+            # Intelligently derive filename from code and prompt
+            filename = self._derive_filename_from_code(code, user_prompt)
+            return self._write_to_file(code, filename)
+        except Exception as error:
+            print(f"[Stage 6] WARNING: Primary save failed: {error}")
+            print("[Stage 6] Writing emergency fallback artifact instead")
+
+            fallback_code = self._minimal_safe_script(user_prompt)
+            output_dir = Path(__file__).parent / self.OUTPUT_DIR
+            output_dir.mkdir(exist_ok=True)
+
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            emergency_path = output_dir / f"stage6_emergency_{timestamp}.py"
+            emergency_path.write_text(fallback_code, encoding="utf-8")
+            return str(emergency_path)
+
+    # ===================================================================
+    # STAGE IMPLEMENTATIONS
+    # ===================================================================
+
+    def _stage2_extract_environment(self) -> dict:
+        """Stage 2 - Extract environment information."""
+        installed_packages = []
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-m", "pip", "freeze"],
+                capture_output=True, text=True, timeout=15,
+            )
+            if proc.returncode == 0:
+                installed_packages = [
+                    line.split("==")[0].lower()
+                    for line in proc.stdout.strip().splitlines()
+                    if "==" in line
+                ]
+        except Exception:
+            pass
+
+        network_available = False
+        try:
+            socket.create_connection(("8.8.8.8", 53), timeout=3)
+            network_available = True
+        except OSError:
+            pass
+
+        disk_free_gb = 0.0
+        try:
+            usage = shutil.disk_usage(Path(__file__).parent)
+            disk_free_gb = usage.free / (1024 ** 3)
+        except Exception:
+            pass
+
+        return {
+            "python_version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+            "os": platform.system(),
+            "os_version": platform.version(),
+            "arch": platform.machine(),
+            "installed_packages": installed_packages,
+            "installed_packages_count": len(installed_packages),
+            "network_available": network_available,
+            "disk_free_gb": disk_free_gb,
+        }
+
+    def _stage3_parse_requirements(self, user_prompt: str, env_info: dict) -> dict:
+        """Stage 3 - Requirement Parser & Intent Classifier."""
+        system = textwrap.dedent("""\
+            You are a software analysis assistant. Given a user request, extract:
+            1. task_type: one of [data_analysis, web_scraping, automation, visualization, ml, general]
+            2. libraries: Python list of pip-installable package names required
+            3. complexity_level: integer 1-10 (1=trivial, 10=extremely complex multi-system)
+            4. estimated_steps: integer, how many implementation steps needed
+            5. description: one-sentence summary of what the code should accomplish
+            6. constraints: list of relevant constraints (e.g. 'no internet', 'Windows only')
+            7. status: 'ok' or 'exit' (exit only if request is impossible or harmful)
+            8. message: if status=='exit', explain why; otherwise empty string
+
+            Respond ONLY with a valid Python dict literal. No explanation.
+            Example:
+            {"task_type": "visualization", "libraries": ["matplotlib", "pandas"], "complexity_level": 3, "estimated_steps": 4, "description": "Read CSV and plot bar chart of sales data", "constraints": [], "status": "ok", "message": ""}
+        """)
+
+        prompt = (
+            f"User request: {user_prompt}\n"
+            f"OS: {env_info['os']} {env_info['arch']}\n"
+            f"Python: {env_info['python_version']}\n"
+            f"Already installed packages: {env_info['installed_packages'][:50]}\n"
+            f"Network: {'available' if env_info['network_available'] else 'unavailable'}"
+        )
+        raw = self.llm.chat(system, prompt)
+
+        try:
+            cleaned = self._strip_code_fences(raw)
+            result = ast.literal_eval(cleaned)
+            result.setdefault("task_type", "general")
+            result.setdefault("libraries", [])
+            result.setdefault("complexity_level", 5)
+            result.setdefault("estimated_steps", 3)
+            result.setdefault("description", user_prompt)
+            result.setdefault("constraints", [])
+            result.setdefault("status", "ok")
+            result.setdefault("message", "")
+            result["original_prompt"] = user_prompt
+            return result
+        except Exception:
+            return {
+                "task_type": "general",
+                "libraries": [],
+                "complexity_level": 5,
+                "estimated_steps": 3,
+                "description": user_prompt,
+                "constraints": [],
+                "status": "ok",
+                "message": "",
+                "original_prompt": user_prompt,
+                "_parse_error": f"Could not parse LLM response: {raw[:200]}",
+            }
+
+    def _stage4_create_plan(self, requirements: dict, env_info: dict) -> list[str]:
+        """
+        Stage 4 - Multi-Step Agentic Planner.
+        LLM-proposed plan steps are validated through guardrails.
+        Commands that fail validation are logged but planning continues
+        (the plan is advisory — actual execution goes through DockerExecutor).
+        """
+        system = textwrap.dedent("""\
+            You are a senior Python engineer acting as an agentic planner.
+            Given a task, produce a numbered step-by-step action plan (max 8 steps).
+
+            You have these tools available at each step:
+              - search_docs: look up API documentation or library usage examples
+              - write_file: write or update a Python source file
+              - run_sandbox: execute code in a sandboxed environment to test it
+              - install_package: install a pip package if not already present
+
+            For each step, indicate which tool(s) to use in square brackets.
+            Respond ONLY with a Python list of strings.
+            Example:
+            [
+                "1. [install_package] Install pandas and matplotlib",
+                "2. [search_docs] Look up pandas read_csv API for handling encodings",
+                "3. [write_file] Write import statements and data loading function",
+                "4. [write_file] Implement bar chart plotting with matplotlib",
+                "5. [write_file] Add if __name__ == '__main__' guard with error handling",
+                "6. [run_sandbox] Execute and verify output"
+            ]
+        """)
+
+        prompt = (
+            f"Task type: {requirements.get('task_type', 'general')}\n"
+            f"User request: {requirements['original_prompt']}\n"
+            f"Description: {requirements.get('description', '')}\n"
+            f"Required libraries: {requirements.get('libraries', [])}\n"
+            f"Complexity: {requirements.get('complexity_level', 5)}/10\n"
+            f"Estimated steps: {requirements.get('estimated_steps', 3)}\n"
+            f"OS: {env_info['os']} | Python: {env_info['python_version']}"
+        )
+        raw = self.llm.chat(system, prompt)
+        try:
+            cleaned = self._strip_code_fences(raw)
+            plan = ast.literal_eval(cleaned)
+            if isinstance(plan, list) and len(plan) > 0:
+                # Validate any executable commands the LLM embedded in plan steps
+                # through guardrails (Module 7). This is advisory at planning time.
+                self._validate_plan_commands(plan, requirements)
+                return plan
+        except Exception:
+            pass
+        return [
+            "1. [install_package] Ensure all required libraries are installed",
+            "2. [search_docs] Review API documentation for key libraries",
+            "3. [write_file] Implement the requested functionality with error handling",
+            "4. [run_sandbox] Execute and verify correctness",
+        ]
+
+    def _validate_plan_commands(self, plan: list[str], requirements: dict) -> None:
+        """
+        Validate LLM-proposed plan commands through guardrails (Module 7).
+        This catches dangerous commands at planning time before any execution.
+        Per Elise's guide: LLM-proposed commands MUST go through validate().
+        """
+        if self.guardrails is None:
+            return
+
+        working_dir = str(Path(__file__).parent / self.OUTPUT_DIR)
+
+        for step in plan:
+            # Extract command-like tokens from plan step text
+            # Plan steps are advisory text, not raw shell commands,
+            # but we check any executable-looking segments
+            step_lower = step.lower()
+            if "pip install" in step_lower or "python " in step_lower:
+                # Extract the command portion after common prefixes
+                for prefix in ["run: ", "execute: ", "run_sandbox] "]:
+                    if prefix in step_lower:
+                        cmd_part = step[step_lower.index(prefix) + len(prefix):].strip()
+                        allowed, _, reason = _validate_and_run(
+                            self.guardrails, cmd_part, working_dir
+                        )
+                        if not allowed:
+                            print(
+                                f"[Guardrails] Plan step contains rejected command: "
+                                f"{cmd_part} — {reason}"
+                            )
+
+    def _stage5_validate_libraries(self, libraries: list[str]) -> dict:
+        """
+        Stage 5 - Library Identification & Validation.
+
+        Checks whether each library exists on PyPI and is importable.
+        Does NOT install packages on the host — installation happens
+        inside the Docker container via execute_with_packages() when
+        the orchestrator executes the script. This keeps the host clean
+        and ensures all package installation happens in the sandbox.
+
+        Status values:
+            "stdlib"           — standard library, always available
+            "installed"        — already importable on the host
+            "verified_on_pypi" — exists on PyPI, will be installed in container
+            "not_found_on_pypi"— does not exist on PyPI, cannot be used
+        """
+        status = {}
+        for lib in libraries:
+            if not lib or not isinstance(lib, str):
+                continue
+
+            normalized = lib.strip()
+            if not normalized:
+                continue
+
+            if self._is_stdlib_package(normalized):
+                status[normalized] = "stdlib"
+                continue
+
+            import_name = lib.replace("-", "_").split("[")[0]
+
+            # Check if already installed on host (available immediately)
+            try:
+                __import__(import_name)
+                status[lib] = "installed"
+                continue
+            except ImportError:
+                pass
+
+            # Verify library exists on PyPI.
+            # Do NOT install on host — package will be installed inside
+            # the Docker container by execute_with_packages() via the
+            # pending_installs field in Schema B.
+            try:
+                pypi_url = f"https://pypi.org/pypi/{lib}/json"
+                with urllib.request.urlopen(pypi_url, timeout=10) as resp:
+                    pypi_data = json.loads(resp.read())
+                    pypi_info = pypi_data.get("info", {}).get("summary", "")
+                status[lib] = "verified_on_pypi"
+                print(f"[Stage 5] '{lib}' verified on PyPI — will install in container")
+            except (urllib.error.HTTPError, urllib.error.URLError, OSError):
+                status[lib] = "not_found_on_pypi"
+                print(f"[Stage 5] WARNING: '{lib}' not found on PyPI — will be skipped")
+
+        return status
+
+    def _stage6_generate_code(
+        self,
+        user_prompt: str,
+        requirements: dict,
+        env_info: dict,
+        plan: list[str],
+        library_status: dict,
+    ) -> str:
+        """Stage 6 - Code Generator."""
+        available_libs = [
+            lib for lib, s in library_status.items()
+            if s in ("installed", "verified_on_pypi", "stdlib")
+        ]
+        failed_libs = [
+            lib for lib, s in library_status.items()
+            if s not in ("installed", "verified_on_pypi", "stdlib")
+        ]
+        plan_text = "\n".join(plan)
+        template_guidance = self._stage6_template_guidance(user_prompt, requirements)
+        project_conventions = (
+            "Single-file executable script layout, UTF-8 text, explicit main guard, "
+            "and defensive runtime error handling."
+        )
+
+        system = textwrap.dedent("""\
+            You are Phase 6 of a multi-stage code generation pipeline.
+            Your role is to transform validated intent + planner output + dependency
+            decisions into clean, executable Python code that directly satisfies the request.
+
+            MANDATORY rules:
+            - Include ALL necessary imports at the top of the file.
+            - Add a `if __name__ == '__main__':` guard as the entry point.
+            - Include implementation-ready structure (functions/classes as needed).
+            - Use descriptive variable names (no single letters except loop indices).
+            - Add minimal inline logging with print() for traceability at key steps only.
+            - Include clear inline comments explaining non-obvious logic.
+            - Wrap risky operations in try/except with meaningful error messages.
+            - Handle edge cases (empty input, missing files, etc.).
+            - Follow environment constraints: Python version, OS assumptions, available packages.
+            - Never import unavailable dependencies.
+            - Prefer deterministic, syntax-safe, dependency-compatible, complete solutions.
+            - Prioritize correctness/completeness over cleverness or unnecessary abstractions.
+            - Return ONLY the Python code. No markdown fences. No explanatory text.
+              Any text outside valid Python will break the parser.
+        """)
+
+        base_prompt = (
+            f"=== USER REQUEST ===\n{user_prompt}\n\n"
+            f"=== PARSED REQUIREMENTS ===\n"
+            f"Task type: {requirements.get('task_type', 'general')}\n"
+            f"Description: {requirements.get('description', user_prompt)}\n"
+            f"Constraints: {requirements.get('constraints', [])}\n\n"
+            f"=== ENVIRONMENT ===\n"
+            f"Python: {env_info['python_version']}\n"
+            f"OS: {env_info['os']} {env_info['arch']}\n"
+            f"Network: {'available' if env_info['network_available'] else 'UNAVAILABLE'}\n\n"
+            f"=== PROJECT CONVENTIONS ===\n{project_conventions}\n\n"
+            f"=== IMPLEMENTATION PLAN ===\n{plan_text}\n\n"
+            f"=== LIBRARY STATUS ===\n"
+            f"Available (use freely): {available_libs}\n"
+            + (f"UNAVAILABLE (do NOT import): {failed_libs}\n\n" if failed_libs else "\n")
+            + "=== TEMPLATE/FEW-SHOT GUIDANCE ===\n"
+            + template_guidance
+        )
+
+        current_prompt = base_prompt
+        last_response = ""
+        for attempt in range(1, self.MAX_STAGE6_REGEN_ATTEMPTS + 1):
+            response = self.llm.chat(system, current_prompt)
+            clean = self._strip_code_fences(response)
+            last_response = clean
+
+            issues = self._stage6_quality_issues(
+                clean,
+                user_prompt=user_prompt,
+                requirements=requirements,
+                available_libs=available_libs,
+                failed_libs=failed_libs,
+            )
+            if not issues:
+                if attempt > 1:
+                    print(f"[Stage 6] Recovered on regeneration attempt {attempt}")
+                return clean
+
+            print(
+                f"[Stage 6] WARNING: Attempt {attempt}/{self.MAX_STAGE6_REGEN_ATTEMPTS} "
+                f"returned low-quality output ({'; '.join(issues[:3])}); retrying..."
+            )
+
+            if attempt < self.MAX_STAGE6_REGEN_ATTEMPTS:
+                current_prompt = (
+                    base_prompt
+                    + "\n=== PREVIOUS LOW-QUALITY OUTPUT ===\n"
+                    + (clean[:700] if clean else "<empty>")
+                    + "\n\n=== ISSUES TO FIX ===\n"
+                    + "\n".join(f"- {issue}" for issue in issues[:8])
+                    + "\n\nReturn ONLY complete runnable Python code that fixes ALL issues."
+                )
+
+        fallback = self._fallback_code_from_prompt(user_prompt, requirements)
+        fallback = self._strip_code_fences(fallback)
+        print("[Stage 6] Fallback template code generated after repeated low-quality LLM output")
+        return fallback if fallback.strip() else self._minimal_safe_script(user_prompt)
+
+    @staticmethod
+    def _stage6_template_guidance(user_prompt: str, requirements: dict) -> str:
+        """Provide small deterministic templates/few-shot hints based on task intent."""
+        text = f"{user_prompt} {requirements.get('description', '')}".lower()
+
+        if any(term in text for term in ("csv", "pandas", "dataframe", "plot", "chart")):
+            return textwrap.dedent("""\
+                Preferred pattern:
+                1. Imports section
+                2. Small pure helper function(s)
+                3. main() with input validation + try/except
+                4. __main__ entrypoint
+            """)
+
+        if any(term in text for term in ("api", "endpoint", "flask", "fastapi", "server")):
+            return textwrap.dedent("""\
+                Preferred pattern:
+                1. Imports and app initialization
+                2. Route handlers with explicit return values
+                3. Input validation and clear error responses
+                4. __main__ startup guard where appropriate
+            """)
+
+        return textwrap.dedent("""\
+            Preferred pattern:
+            1. Imports
+            2. Focused helper functions/classes
+            3. main() orchestration with minimal logging
+            4. __main__ guard
+            Keep code concise, complete, and executable.
+        """)
+
+    # ===================================================================
+    # UTILITY METHODS
+    # ===================================================================
+
+    def _write_to_file(self, code: str, filename: str) -> str:
+        """Write generated code to the output directory."""
+        code = self._strip_code_fences(code)
+        if not code.strip():
+            code = self._minimal_safe_script("Empty generation result")
+
+        output_dir = Path(__file__).parent / self.OUTPUT_DIR
+        output_dir.mkdir(exist_ok=True)
+
+        file_path = output_dir / filename
+        file_path.write_text(code, encoding="utf-8")
+
+        stem = Path(filename).stem
+        suffix = Path(filename).suffix or ".py"
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        snapshot_path = output_dir / f"{stem}_{timestamp}{suffix}"
+        snapshot_path.write_text(code, encoding="utf-8")
+
+        return str(file_path)
+
+    @staticmethod
+    def _strip_code_fences(text: str) -> str:
+        """Remove markdown ```python ... ``` fences the LLM may wrap around code."""
+        lines = text.strip().splitlines()
+        if lines and lines[0].strip().startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        return "\n".join(lines).strip()
+
+    @staticmethod
+    def _format_prompt_preview(user_prompt: str, max_len: int = 140) -> str:
+        """Format prompt preview as a single line."""
+        one_line = " ".join(user_prompt.split())
+        if len(one_line) <= max_len:
+            return one_line
+        return one_line[: max_len - 3] + "..."
+
+    @staticmethod
+    def _safe_console_text(text: str, max_len: int = 100) -> str:
+        """Safely format text for console output - escapes newlines and truncates."""
+        if not text:
+            return "N/A"
+        # Replace newlines with spaces
+        safe_text = text.replace('\n', ' ').replace('\r', ' ')
+        # Remove excess whitespace
+        safe_text = ' '.join(safe_text.split())
+        # Truncate if needed
+        if len(safe_text) > max_len:
+            safe_text = safe_text[:max_len - 3] + "..."
+        return safe_text
+
+    @staticmethod
+    def _looks_like_non_code(text: str) -> bool:
+        """Heuristic filter to detect plain-language responses that are not Python code."""
+        sample = text.strip()
+        if not sample:
+            return True
+
+        python_signals = (
+            "import ", "def ", "class ", "if __name__", "print(", "try:",
+            "for ", "while ", "from ", "="
+        )
+        has_signal = any(token in sample for token in python_signals)
+
+        disallowed_prefixes = (
+            "here is", "this code", "the script", "i can't", "i cannot", "sure"
+        )
+        first_line = sample.splitlines()[0].strip().lower()
+        if first_line.startswith(disallowed_prefixes):
+            return True
+
+        return not has_signal
+
+    def _stage6_quality_issues(
+        self,
+        code: str,
+        user_prompt: str,
+        requirements: dict,
+        available_libs: list[str],
+        failed_libs: list[str],
+    ) -> list[str]:
+        """Validate whether generated code is coherent enough to accept at Stage 6."""
+        issues = []
+        clean = self._strip_code_fences(code)
+
+        if not clean.strip():
+            return ["output is empty"]
+
+        if self._looks_like_non_code(clean):
+            issues.append("output does not look like Python code")
+
+        line_count = len([line for line in clean.splitlines() if line.strip()])
+        if line_count < self.MIN_STAGE6_CODE_LINES:
+            issues.append(f"code is too short ({line_count} non-empty lines)")
+
+        if "if __name__ == '__main__':" not in clean:
+            issues.append("missing main entry guard")
+
+        try:
+            ast.parse(clean)
+        except SyntaxError as error:
+            issues.append(f"syntax error at line {error.lineno}: {error.msg}")
+
+        lowered = clean.lower()
+        for unavailable in failed_libs:
+            module_name = unavailable.replace("-", "_").split("[")[0].strip().lower()
+            if module_name and (
+                f"import {module_name}" in lowered or f"from {module_name} import" in lowered
+            ):
+                issues.append(f"imports unavailable library '{unavailable}'")
+
+        description = str(requirements.get("description", "")).lower()
+        prompt_text = (user_prompt or "").lower()
+        if "fallback execution: generated minimal safe script." in lowered:
+            if all(token not in prompt_text for token in ("fallback", "minimal safe")):
+                issues.append("returned generic fallback template instead of task-specific code")
+
+        if "tkinter" in prompt_text and "tkinter" not in lowered:
+            issues.append("tkinter requested but not used")
+        if "flask" in prompt_text and "flask" not in lowered and "fastapi" not in lowered:
+            issues.append("web API requested but no framework usage detected")
+        if "csv" in prompt_text and "csv" not in lowered and "pandas" not in lowered:
+            issues.append("csv handling requested but no csv/pandas usage detected")
+
+        return issues
+
+    @staticmethod
+    def _minimal_safe_script(summary: str) -> str:
+        """Always-available minimal script to guarantee a writable fallback artifact."""
+        safe_summary = (summary or "No summary provided").replace("\"", "'")[:180]
+        return textwrap.dedent(
+            f"""\
+            def main():
+                print("Fallback execution: generated minimal safe script.")
+                print("Request summary: {safe_summary}")
+
+            if __name__ == '__main__':
+                main()
+            """
+        )
+
+    @staticmethod
+    def _is_stdlib_package(package_name: str) -> bool:
+        """Detect standard-library modules so Stage 5 does not try to install them."""
+        base = package_name.split(".")[0].replace("-", "_").strip().lower()
+        stdlib_names = set(getattr(sys, "stdlib_module_names", set()))
+        return base in stdlib_names
+
+    @staticmethod
+    def _stage3_apply_complexity_heuristics(requirements: dict, user_prompt: str) -> dict:
+        """Apply deterministic complexity boosts for requests the model may underestimate."""
+        text = user_prompt.lower()
+        complexity = int(requirements.get("complexity_level", 5))
+        reasons = []
+
+        infra_terms = (
+            "microservice", "kubernetes", "ci/cd", "service mesh", "autoscaling",
+            "multi-region", "distributed tracing", "zero-downtime"
+        )
+        service_terms = ("fastapi", "flask", "rest api", "endpoint", "uvicorn")
+        concurrency_terms = ("multithread", "concurrent", "threadpool", "asyncio", "retry")
+        ml_terms = ("machine learning", "train", "regression", "classification", "mae", "r2")
+        gui_terms = ("tkinter", "gui", "desktop app")
+
+        if any(t in text for t in infra_terms):
+            complexity = max(complexity, 9)
+            reasons.append("infra-scale terms detected")
+        if any(t in text for t in service_terms):
+            complexity = max(complexity, 6)
+            reasons.append("service/API runtime detected")
+        if any(t in text for t in concurrency_terms):
+            complexity = max(complexity, 6)
+            reasons.append("concurrency/retry requirements detected")
+        if any(t in text for t in ml_terms):
+            complexity = max(complexity, 6)
+            reasons.append("ML workflow requirements detected")
+        if any(t in text for t in gui_terms):
+            complexity = max(complexity, 6)
+            reasons.append("GUI workflow requirements detected")
+
+        requirements["complexity_level"] = min(10, complexity)
+        if reasons:
+            requirements["_complexity_reason"] = "; ".join(sorted(set(reasons)))
+        return requirements
+
+    @staticmethod
+    def _fallback_code_from_prompt(user_prompt: str, requirements: dict) -> str:
+        """Generate deterministic fallback code when LLM repeatedly returns unusable output."""
+        prompt_l = (user_prompt or "").lower()
+        description = requirements.get("description", "") if isinstance(requirements, dict) else ""
+
+        if "fibonacci" in prompt_l:
+            return textwrap.dedent("""\
+                def fibonacci(n):
+                    sequence = [0, 1]
+                    while len(sequence) < n:
+                        sequence.append(sequence[-1] + sequence[-2])
+                    return sequence[:n]
+
+                if __name__ == '__main__':
+                    print(fibonacci(20))
+            """)
+
+        return textwrap.dedent(f"""\
+            def main():
+                try:
+                    print("Fallback execution: generated minimal safe script.")
+                    print("Request summary: {(description or user_prompt)[:180]}")
+                except Exception as error:
+                    print(f"Execution error: {{error}}")
+
+            if __name__ == '__main__':
+                main()
+        """)
+
+
+# ---------------------------------------------------------------------------
+# CLI entry point
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Phase 3 - Proactive Code Generator (qwen2.5-coder:7b via Ollama)"
+    )
+    parser.add_argument(
+        "prompt",
+        nargs="?",
+        default="Write a Python script that prints a multiplication table from 1 to 10",
+        help="Natural-language description of the code to generate",
+    )
+    parser.add_argument(
+        "--max-tokens", type=int, default=2048,
+        help="Maximum new tokens for LLM generation (default: 2048)",
+    )
+    parser.add_argument(
+        "--temperature", type=float, default=0.2,
+        help="Sampling temperature (default: 0.2 - near-deterministic)",
+    )
+    parser.add_argument(
+        "--complexity-threshold", type=int, default=8,
+        help="Max complexity level 1-10 before early exit (default: 8)",
+    )
+    args = parser.parse_args()
+
+    print(f"Phase 3 - Proactive Code Generator")
+    print(f"Model: qwen2.5-coder:7b via Ollama")
+    print(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+    llm = QwenCoderClient(max_new_tokens=args.max_tokens, temperature=args.temperature)
+    generator = ProactiveCodeGenerator(llm_client=llm)
+    generator.COMPLEXITY_THRESHOLD = args.complexity_threshold
+
+    result = generator.generate_from_prompt(args.prompt)
+
+    print(f"\n{'='*60}")
+    print(f"PIPELINE RESULT: {result['status'].upper()}")
+    print(f"{'='*60}")
+
+    if result["status"] == "success":
+        print(f"Saved to: {result.get('file_path', 'N/A')}")
+        print(f"Requirements identified: {result.get('requirements', [])}")
+    else:
+        print(f"Failed at Stage {result.get('stage', '?')}")
+        print(result.get("error", "Unknown error"))
