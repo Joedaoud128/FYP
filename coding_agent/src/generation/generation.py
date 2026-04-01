@@ -198,11 +198,36 @@ class ProactiveCodeGenerator:
     OUTPUT_DIR = "generated_code"
     MIN_STAGE6_CODE_LINES = 6
 
+    LOGS_DIR = Path(__file__).parent.parent.parent / "logs"
+
     def __init__(self, llm_client: QwenCoderClient | None = None):
         self.llm: QwenCoderClient = llm_client or QwenCoderClient()
         # Load guardrails engine once at init — stateless, reused for all commands
         self.guardrails = _load_guardrails()
         self._working_dir = str(Path(__file__).parent / self.OUTPUT_DIR)
+        self._log_entries: list[str] = []
+        self._session_start = datetime.now()
+
+    def _log(self, message: str) -> None:
+        """Print to terminal and buffer for file logging."""
+        print(message)
+        self._log_entries.append(message)
+
+    def _save_logs(self, generated_filename: str) -> None:
+        """Write buffered log entries to logs/<stem>_logs.log."""
+        try:
+            self.LOGS_DIR.mkdir(parents=True, exist_ok=True)
+            stem = Path(generated_filename).stem if generated_filename else "generation_session"
+            log_file = self.LOGS_DIR / f"{stem}_logs.log"
+            with log_file.open("w", encoding="utf-8") as f:
+                f.write(f"Generation Log — {self._session_start.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"Generated file : {generated_filename or 'N/A'}\n")
+                f.write("=" * 60 + "\n\n")
+                for entry in self._log_entries:
+                    f.write(entry + "\n")
+            print(f"[Log] Session log saved to: {log_file}")
+        except Exception as exc:
+            print(f"[Log] WARNING: Could not save log file: {exc}")
 
     # ===================================================================
     # UTILITY METHODS FOR CODE ANALYSIS
@@ -296,24 +321,25 @@ class ProactiveCodeGenerator:
         """
         # ----- Stage 1: Accept user input -----
         prompt_preview = self._format_prompt_preview(user_prompt)
-        print(f"\n{'='*60}")
-        print(f"[Stage 1] Received prompt ({len(user_prompt)} chars): {prompt_preview}")
-        print(f"{'='*60}")
+        self._log(f"\n{'='*60}")
+        self._log(f"[Stage 1] Received prompt ({len(user_prompt)} chars): {prompt_preview}")
+        self._log(f"{'='*60}")
 
         # ----- Stage 2: Extract environment info -----
         env_info = self._stage2_extract_environment()
-        print(f"[Stage 2] Environment collected:")
-        print(f"          Python {env_info['python_version']} | {env_info['os']} {env_info['arch']}")
-        print(f"          Packages: {env_info['installed_packages_count']} installed")
-        print(f"          Network: {'online' if env_info['network_available'] else 'OFFLINE'}")
-        print(f"          Disk free: {env_info['disk_free_gb']:.1f} GB")
+        self._log("[Stage 2] Environment collected:")
+        self._log(f"          Python {env_info['python_version']} | {env_info['os']} {env_info['arch']}")
+        self._log(f"          Packages: {env_info['installed_packages_count']} installed")
+        self._log(f"          Network: {'online' if env_info['network_available'] else 'OFFLINE'}")
+        self._log(f"          Disk free: {env_info['disk_free_gb']:.1f} GB")
 
         # ----- Stage 3: Parse requirements + Complexity Threshold -----
         requirements = self._stage3_parse_requirements(user_prompt, env_info)
         requirements = self._stage3_apply_complexity_heuristics(requirements, user_prompt)
 
         if requirements.get("status") == "exit":
-            print(f"[Stage 3] EXITING: {requirements['message']}")
+            self._log(f"[Stage 3] EXITING: {requirements['message']}")
+            self._save_logs("generation_failed")
             return {"status": "error", "stage": 3, "error": requirements["message"]}
 
         complexity = requirements.get("complexity_level", 5)
@@ -323,47 +349,49 @@ class ProactiveCodeGenerator:
                 f"({self.COMPLEXITY_THRESHOLD}/10). Please break this into "
                 f"smaller sub-tasks and re-submit each part individually."
             )
-            print(f"[Stage 3] COMPLEXITY THRESHOLD EXCEEDED: {msg}")
+            self._log(f"[Stage 3] COMPLEXITY THRESHOLD EXCEEDED: {msg}")
+            self._save_logs("generation_failed")
             return {"status": "error", "stage": 3, "error": msg, "requirements": requirements}
 
         identified_libraries = requirements.get("libraries", [])
-        print(f"[Stage 3] Task type: {requirements.get('task_type', 'general')}")
-        print(f"          Complexity: {complexity}/10 (threshold: {self.COMPLEXITY_THRESHOLD})")
-        print(f"          Libraries: {identified_libraries}")
-        print(f"          Steps: {requirements.get('estimated_steps', 'N/A')}")
+        self._log(f"[Stage 3] Task type: {requirements.get('task_type', 'general')}")
+        self._log(f"          Complexity: {complexity}/10 (threshold: {self.COMPLEXITY_THRESHOLD})")
+        self._log(f"          Libraries: {identified_libraries}")
+        self._log(f"          Steps: {requirements.get('estimated_steps', 'N/A')}")
         description = requirements.get('description', 'N/A')
-        print(f"          Description: {self._safe_console_text(description)}")
+        self._log(f"          Description: {self._safe_console_text(description)}")
         if requirements.get("_complexity_reason"):
-            print(f"          Complexity heuristic: {requirements['_complexity_reason']}")
+            self._log(f"          Complexity heuristic: {requirements['_complexity_reason']}")
 
         # ----- Stage 4: Multi-Step Agentic Planner -----
         # LLM proposes a plan — guardrails validate each proposed command
         plan = self._stage4_create_plan(requirements, env_info)
-        print(f"[Stage 4] Agentic plan created with {len(plan)} step(s):")
+        self._log(f"[Stage 4] Agentic plan created with {len(plan)} step(s):")
         for step in plan:
-            print(f"          {step}")
+            self._log(f"          {step}")
 
         # ----- Stage 5: Library Identification & Validation -----
         # pip install commands are DETERMINISTIC (not LLM-proposed) — bypass guardrails per design
         library_status = self._stage5_validate_libraries(identified_libraries)
-        print(f"[Stage 5] Library validation complete:")
+        self._log("[Stage 5] Library validation complete:")
         for lib, status in library_status.items():
-            print(f"          {lib}: {status}")
+            self._log(f"          {lib}: {status}")
 
         # ----- Stage 6: Code Generator -----
         code = self._stage6_generate_code(
             user_prompt, requirements, env_info, plan, library_status
         )
-        print(f"[Stage 6] Code generated ({len(code)} chars)")
+        self._log(f"[Stage 6] Code generated ({len(code)} chars)")
 
         # Persist the artifact with intelligent filename derivation
         file_path = self._persist_stage6_artifact(code, user_prompt)
-        print(f"[Stage 6] Code saved to: {file_path}")
+        self._log(f"[Stage 6] Code saved to: {file_path}")
         
         # Extract function/class names for reference
         functions = self._extract_function_names(code)
         classes = self._extract_class_names(code)
 
+        self._save_logs(file_path)
         return {
             "status": "success",
             "stage": 6,
@@ -393,8 +421,8 @@ class ProactiveCodeGenerator:
             filename = self._derive_filename_from_code(code, user_prompt)
             return self._write_to_file(code, filename)
         except Exception as error:
-            print(f"[Stage 6] WARNING: Primary save failed: {error}")
-            print("[Stage 6] Writing emergency fallback artifact instead")
+            self._log(f"[Stage 6] WARNING: Primary save failed: {error}")
+            self._log("[Stage 6] Writing emergency fallback artifact instead")
 
             fallback_code = self._minimal_safe_script(user_prompt)
             output_dir = Path(__file__).parent / self.OUTPUT_DIR
@@ -587,7 +615,7 @@ class ProactiveCodeGenerator:
                             self.guardrails, cmd_part, working_dir
                         )
                         if not allowed:
-                            print(
+                            self._log(
                                 f"[Guardrails] Plan step contains rejected command: "
                                 f"{cmd_part} — {reason}"
                             )
@@ -641,10 +669,10 @@ class ProactiveCodeGenerator:
                     pypi_data = json.loads(resp.read())
                     pypi_info = pypi_data.get("info", {}).get("summary", "")
                 status[lib] = "verified_on_pypi"
-                print(f"[Stage 5] '{lib}' verified on PyPI — will install in container")
+                self._log(f"[Stage 5] '{lib}' verified on PyPI — will install in container")
             except (urllib.error.HTTPError, urllib.error.URLError, OSError):
                 status[lib] = "not_found_on_pypi"
-                print(f"[Stage 5] WARNING: '{lib}' not found on PyPI — will be skipped")
+                self._log(f"[Stage 5] WARNING: '{lib}' not found on PyPI — will be skipped")
 
         return status
 
@@ -729,10 +757,10 @@ class ProactiveCodeGenerator:
             )
             if not issues:
                 if attempt > 1:
-                    print(f"[Stage 6] Recovered on regeneration attempt {attempt}")
+                    self._log(f"[Stage 6] Recovered on regeneration attempt {attempt}")
                 return clean
 
-            print(
+            self._log(
                 f"[Stage 6] WARNING: Attempt {attempt}/{self.MAX_STAGE6_REGEN_ATTEMPTS} "
                 f"returned low-quality output ({'; '.join(issues[:3])}); retrying..."
             )
@@ -749,7 +777,7 @@ class ProactiveCodeGenerator:
 
         fallback = self._fallback_code_from_prompt(user_prompt, requirements)
         fallback = self._strip_code_fences(fallback)
-        print("[Stage 6] Fallback template code generated after repeated low-quality LLM output")
+        self._log("[Stage 6] Fallback template code generated after repeated low-quality LLM output")
         return fallback if fallback.strip() else self._minimal_safe_script(user_prompt)
 
     @staticmethod

@@ -43,6 +43,7 @@ import logging
 import tempfile
 import time
 from datetime import datetime
+from pathlib import Path
 
 # ── Ensure sibling modules are importable ─────────────────────────────────────
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -55,17 +56,51 @@ for _subdir in [".", "src/orchestrator", "src/generation", "src/debugging", "src
 AGENT_NAME    = "ESIB AI Coding Agent"
 AGENT_VERSION = "1.0.0"
 FYP_CODE      = "FYP_26_21"
+LOGS_DIR      = Path(_HERE) / "logs"
+
+
+# ── TeeStream — mirrors stdout to terminal + log file simultaneously ───────────
+class _TeeStream:
+    """
+    Wraps an output stream so every write goes to both the original
+    stream (terminal) and a log file at the same time.
+    Used to capture all print() output alongside logging records
+    without modifying any pipeline module.
+    """
+    def __init__(self, original, file_handle):
+        self._orig = original
+        self._file = file_handle
+
+    def write(self, data: str):
+        self._orig.write(data)
+        self._file.write(data)
+        self._file.flush()
+
+    def flush(self):
+        self._orig.flush()
+        self._file.flush()
+
+    def fileno(self):
+        return self._orig.fileno()
+
+    def isatty(self):
+        return getattr(self._orig, "isatty", lambda: False)()
+
+    def __getattr__(self, name):
+        return getattr(self._orig, name)
 
 # ── Logging setup — structured for Docker log capture ─────────────────────────
 def _setup_logging(verbose: bool = False) -> logging.Logger:
     """
     Configure root logger so all pipeline modules (orchestrator, generation,
-    debugging, guardrails) write to the same stream. Docker captures stdout
-    and stderr from the container; using logging.StreamHandler(sys.stdout)
-    ensures all log lines appear in `docker logs`.
+    debugging, guardrails) write to the same stream.
+
+    When called after sys.stdout has been replaced with a _TeeStream, the
+    StreamHandler automatically writes every log record to both the terminal
+    and the open log file — no separate FileHandler required.
     """
     level = logging.DEBUG if verbose else logging.INFO
-    handler = logging.StreamHandler(sys.stdout)
+    handler = logging.StreamHandler(sys.stdout)   # sys.stdout may be _TeeStream here
     handler.setLevel(level)
     fmt = logging.Formatter(
         "%(asctime)s [%(name)-20s] %(levelname)-8s %(message)s",
@@ -274,6 +309,33 @@ def _print_summary(results: dict, total_elapsed: float) -> int:
     return 0 if all_ok else 1
 
 
+# ── Log filename derivation ────────────────────────────────────────────────────
+def _derive_log_filename(args: argparse.Namespace, results: dict, ts: str) -> str:
+    """
+    Build a descriptive log filename from the run mode and result.
+
+    Patterns:
+        generate_<script>_<ts>_logs.log   — generate mode
+        debug_<script>_<ts>_logs.log      — fix/debug mode
+        demo_<script>_<ts>_logs.log       — demo mode
+        session_<ts>_logs.log             — fallback
+    """
+    if getattr(args, "generate", None):
+        script_path = (results.get("generate") or {}).get("script_path")
+        stem = Path(script_path).stem if script_path else "generate"
+        return f"generate_{stem}_{ts}_logs.log"
+
+    if getattr(args, "fix", None):
+        return f"debug_{Path(args.fix).stem}_{ts}_logs.log"
+
+    if getattr(args, "demo", False):
+        gen_path = (results.get("generate") or {}).get("script_path")
+        stem = Path(gen_path).stem if gen_path else "demo"
+        return f"demo_{stem}_{ts}_logs.log"
+
+    return f"session_{ts}_logs.log"
+
+
 # ── CLI argument parser ────────────────────────────────────────────────────────
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -337,28 +399,41 @@ def main() -> int:
     parser = _build_parser()
     args   = parser.parse_args()
 
+    # ── Session log setup ─────────────────────────────────────────────────────
+    # Open a temp log file before anything is printed so the banner and all
+    # subsequent output (print + logging from every pipeline module) is captured.
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    _session_ts   = datetime.now().strftime("%Y%m%d_%H%M%S")
+    _temp_log     = LOGS_DIR / f"session_{_session_ts}_logs.log"
+    _log_fh       = _temp_log.open("w", encoding="utf-8")
+    _orig_stdout  = sys.stdout
+    sys.stdout    = _TeeStream(_orig_stdout, _log_fh)  # captures all print() output
+
+    # _setup_logging creates StreamHandler(sys.stdout) which now points at
+    # _TeeStream → every logger.info/warning/error also lands in the log file.
     logger = _setup_logging(verbose=args.verbose)
-
-    # Header
-    print(_banner(
-        f"{AGENT_NAME} v{AGENT_VERSION}  |  {FYP_CODE}  |  "
-        f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-    ))
-
-    # Log environment info (useful when running inside Docker)
-    logger.info("Python     : %s", sys.version.split()[0])
-    logger.info("Working dir: %s", os.getcwd())
-    logger.info("Script dir : %s", _HERE)
-    if os.environ.get("RUNNING_IN_DOCKER"):
-        logger.info("Environment: Docker container")
-    else:
-        logger.info("Environment: host")
 
     wall_start = time.time()
     results    = {}
+    exit_code  = 0
 
-    # ── Dispatch ───────────────────────────────────────────────────────────────
     try:
+        # Header
+        print(_banner(
+            f"{AGENT_NAME} v{AGENT_VERSION}  |  {FYP_CODE}  |  "
+            f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        ))
+
+        # Log environment info (useful when running inside Docker)
+        logger.info("Python     : %s", sys.version.split()[0])
+        logger.info("Working dir: %s", os.getcwd())
+        logger.info("Script dir : %s", _HERE)
+        if os.environ.get("RUNNING_IN_DOCKER"):
+            logger.info("Environment: Docker container")
+        else:
+            logger.info("Environment: host")
+
+        # ── Dispatch ──────────────────────────────────────────────────────────
         if args.generate:
             results["generate"] = run_generate(
                 prompt=args.generate,
@@ -378,16 +453,33 @@ def main() -> int:
                 logger=logger,
             )
 
+        # ── Summary & exit code ───────────────────────────────────────────────
+        exit_code = _print_summary(results, time.time() - wall_start)
+
     except KeyboardInterrupt:
         print("\n\n  [Interrupted by user]")
-        return 130
+        exit_code = 130
 
     except Exception as exc:
         logger.exception("Unhandled exception in agent main: %s", exc)
-        return 1
+        exit_code = 1
 
-    # ── Summary & exit code ────────────────────────────────────────────────────
-    return _print_summary(results, time.time() - wall_start)
+    finally:
+        # Restore stdout before renaming so the "saved to" message goes to
+        # the terminal only (log file is already fully written at this point).
+        sys.stdout = _orig_stdout
+        _log_fh.flush()
+        _log_fh.close()
+
+        _final_name = _derive_log_filename(args, results, _session_ts)
+        _final_path = LOGS_DIR / _final_name
+        try:
+            _temp_log.rename(_final_path)
+        except OSError:
+            _final_path = _temp_log   # keep temp name if rename fails
+        print(f"\n[Log] Session log saved to: {_final_path}")
+
+    return exit_code
 
 
 if __name__ == "__main__":
