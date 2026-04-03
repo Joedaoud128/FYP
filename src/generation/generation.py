@@ -38,8 +38,9 @@ import textwrap
 import logging
 import urllib.request
 import urllib.error
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
+from time import perf_counter
 
 
 # ---------------------------------------------------------------------------
@@ -217,6 +218,8 @@ class ProactiveCodeGenerator:
     PROMPT_MAX_CHARS = 4000
     PROMPT_INJECTION_BLOCK_THRESHOLD = 2
     STRICT_PROMPT_INJECTION_BLOCK = True
+    LOG_DIR = "logs"
+    RUN_STATS_FILE = "pipeline_run_stats.jsonl"
 
     def __init__(self, llm_client: QwenCoderClient | None = None):
         self.llm: QwenCoderClient = llm_client or QwenCoderClient()
@@ -345,6 +348,18 @@ class ProactiveCodeGenerator:
             "bypass",
         )
         return any(token in lowered for token in unsafe_tokens)
+
+    def _write_run_stats(self, stats: dict) -> None:
+        """Append run stats as pretty JSON blocks so each execution is easy to read."""
+        try:
+            log_dir = Path(__file__).parent / self.LOG_DIR
+            log_dir.mkdir(exist_ok=True)
+            log_path = log_dir / self.RUN_STATS_FILE
+            with log_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(stats, indent=2, ensure_ascii=True))
+                handle.write("\n" + ("-" * 80) + "\n")
+        except Exception as error:
+            print(f"[Stats] WARNING: Failed to write run stats: {error}")
 
     @staticmethod
     def _stage3_temperature() -> float:
@@ -541,9 +556,48 @@ class ProactiveCodeGenerator:
         NOTE: This function does NOT execute the script.
         Execution is the Orchestrator's responsibility via DockerExecutor.
         """
+        run_start = perf_counter()
+        now_utc = datetime.now(timezone.utc)
+        run_stats = {
+            "run_id": now_utc.strftime("%Y%m%dT%H%M%S.%fZ"),
+            "timestamp_utc": now_utc.isoformat(),
+            "prompt_chars": len(user_prompt or ""),
+            "prompt_preview": self._format_prompt_preview(user_prompt or ""),
+            "status": "running",
+            "stage": 1,
+            "features": {
+                "prompt_injection_signals": [],
+                "prompt_injection_blocked": False,
+                "stage6_retries": 0,
+                "stage6_syntax_repairs": 0,
+                "stage6_used_fallback": False,
+            },
+            "budgets": {},
+            "summary": {},
+        }
+
+        def _finalize(result: dict) -> dict:
+            run_stats["status"] = result.get("status", "error")
+            run_stats["stage"] = result.get("stage", run_stats.get("stage", 0))
+            run_stats["duration_ms"] = int((perf_counter() - run_start) * 1000)
+            if result.get("error"):
+                run_stats["error"] = result.get("error")
+            if result.get("status") == "success":
+                run_stats["summary"] = {
+                    "task_type": result.get("task_type"),
+                    "complexity": result.get("complexity"),
+                    "requirements": result.get("requirements", []),
+                    "file_path": result.get("file_path"),
+                    "functions_count": len(result.get("functions", [])),
+                    "classes_count": len(result.get("classes", [])),
+                }
+            self._write_run_stats(run_stats)
+            return result
+
         # ----- Stage 1: Accept user input -----
         user_prompt = self._sanitize_user_prompt(user_prompt)
         injection_signals = self._detect_prompt_injection_signals(user_prompt)
+        run_stats["features"]["prompt_injection_signals"] = injection_signals
         if injection_signals:
             print(f"[Security] Prompt injection signals detected: {injection_signals}")
             if (
@@ -554,7 +608,8 @@ class ProactiveCodeGenerator:
                     "Potential prompt-injection content detected in request. "
                     "Please restate the task without instruction-override language."
                 )
-                return {"status": "error", "stage": 1, "error": msg}
+                run_stats["features"]["prompt_injection_blocked"] = True
+                return _finalize({"status": "error", "stage": 1, "error": msg})
 
         prompt_preview = self._format_prompt_preview(user_prompt)
         print(f"\n{'='*60}")
@@ -563,6 +618,14 @@ class ProactiveCodeGenerator:
 
         # ----- Stage 2: Extract environment info -----
         env_info = self._stage2_extract_environment()
+        run_stats["stage"] = 2
+        run_stats["summary"]["environment"] = {
+            "python_version": env_info.get("python_version"),
+            "os": env_info.get("os"),
+            "arch": env_info.get("arch"),
+            "network_available": env_info.get("network_available"),
+            "installed_packages_count": env_info.get("installed_packages_count"),
+        }
         print(f"[Stage 2] Environment collected:")
         print(f"          Python {env_info['python_version']} | {env_info['os']} {env_info['arch']}")
         print(f"          Packages: {env_info['installed_packages_count']} installed")
@@ -573,10 +636,13 @@ class ProactiveCodeGenerator:
         requirements = self._stage3_parse_requirements(user_prompt, env_info)
         requirements = self._stage3_apply_complexity_heuristics(requirements, user_prompt)
         requirements["libraries"] = self._normalize_library_names(requirements.get("libraries", []))
+        run_stats["stage"] = 3
+        run_stats["budgets"]["stage3_max_new_tokens"] = self._stage3_token_budget(user_prompt)
+        run_stats["budgets"]["stage3_temperature"] = self._stage3_temperature()
 
         if requirements.get("status") == "exit":
             print(f"[Stage 3] EXITING: {requirements['message']}")
-            return {"status": "error", "stage": 3, "error": requirements["message"]}
+            return _finalize({"status": "error", "stage": 3, "error": requirements["message"]})
 
         complexity = requirements.get("complexity_level", 5)
         if complexity > self.COMPLEXITY_THRESHOLD:
@@ -586,7 +652,7 @@ class ProactiveCodeGenerator:
                 f"smaller sub-tasks and re-submit each part individually."
             )
             print(f"[Stage 3] COMPLEXITY THRESHOLD EXCEEDED: {msg}")
-            return {"status": "error", "stage": 3, "error": msg, "requirements": requirements}
+            return _finalize({"status": "error", "stage": 3, "error": msg, "requirements": requirements})
 
         identified_libraries = requirements.get("libraries", [])
         print(f"[Stage 3] Task type: {requirements.get('task_type', 'general')}")
@@ -601,6 +667,10 @@ class ProactiveCodeGenerator:
         # ----- Stage 4: Multi-Step Agentic Planner -----
         # LLM proposes a plan — guardrails validate each proposed command
         plan = self._stage4_create_plan(requirements, env_info)
+        run_stats["stage"] = 4
+        run_stats["budgets"]["stage4_max_new_tokens"] = self._stage4_token_budget(requirements)
+        run_stats["budgets"]["stage4_temperature"] = self._stage4_temperature(requirements)
+        run_stats["summary"]["planner_steps"] = len(plan)
         print(f"[Stage 4] Agentic plan created with {len(plan)} step(s):")
         for step in plan:
             print(f"          {step}")
@@ -608,14 +678,23 @@ class ProactiveCodeGenerator:
         # ----- Stage 5: Library Identification & Validation -----
         # pip install commands are DETERMINISTIC (not LLM-proposed) — bypass guardrails per design
         library_status = self._stage5_validate_libraries(identified_libraries)
+        run_stats["stage"] = 5
+        run_stats["summary"]["library_status"] = library_status
         print(f"[Stage 5] Library validation complete:")
         for lib, status in library_status.items():
             print(f"          {lib}: {status}")
 
         # ----- Stage 6: Code Generator -----
-        code = self._stage6_generate_code(
+        code, stage6_stats = self._stage6_generate_code(
             user_prompt, requirements, env_info, plan, library_status
         )
+        run_stats["stage"] = 6
+        run_stats["budgets"]["stage6_max_new_tokens"] = stage6_stats.get("base_budget")
+        run_stats["budgets"]["stage6_first_attempt_tokens"] = stage6_stats.get("first_attempt_budget")
+        run_stats["budgets"]["stage6_temperature"] = stage6_stats.get("temperature")
+        run_stats["features"]["stage6_retries"] = stage6_stats.get("retries", 0)
+        run_stats["features"]["stage6_syntax_repairs"] = stage6_stats.get("syntax_repairs", 0)
+        run_stats["features"]["stage6_used_fallback"] = stage6_stats.get("used_fallback", False)
         print(f"[Stage 6] Code generated ({len(code)} chars)")
 
         # Persist the artifact with intelligent filename derivation
@@ -626,7 +705,7 @@ class ProactiveCodeGenerator:
         functions = self._extract_function_names(code)
         classes = self._extract_class_names(code)
 
-        return {
+        return _finalize({
             "status": "success",
             "stage": 6,
             "file_path": file_path,
@@ -637,7 +716,7 @@ class ProactiveCodeGenerator:
             "description": requirements.get("description", user_prompt),
             "functions": functions,
             "classes": classes,
-        }
+        })
 
     def _persist_stage6_artifact(self, code: str, user_prompt: str) -> str:
         """
@@ -943,7 +1022,7 @@ class ProactiveCodeGenerator:
         env_info: dict,
         plan: list[str],
         library_status: dict,
-    ) -> str:
+    ) -> tuple[str, dict]:
         """Stage 6 - Code Generator."""
         available_libs = [
             lib for lib, s in library_status.items()
@@ -1015,8 +1094,18 @@ class ProactiveCodeGenerator:
         stage6_tokens = self._stage6_token_budget(requirements)
         stage6_first_attempt_tokens = self._stage6_first_attempt_budget(requirements)
         stage6_temp = self._stage6_temperature(requirements)
+        stage6_stats = {
+            "base_budget": stage6_tokens,
+            "first_attempt_budget": stage6_first_attempt_tokens,
+            "temperature": stage6_temp,
+            "attempts": 0,
+            "retries": 0,
+            "syntax_repairs": 0,
+            "used_fallback": False,
+        }
         current_prompt = base_prompt
         for attempt in range(1, self.MAX_STAGE6_REGEN_ATTEMPTS + 1):
+            stage6_stats["attempts"] = attempt
             current_token_budget = (
                 stage6_first_attempt_tokens if attempt == 1 else min(1200, stage6_tokens)
             )
@@ -1038,10 +1127,12 @@ class ProactiveCodeGenerator:
             if not issues:
                 if attempt > 1:
                     print(f"[Stage 6] Recovered on regeneration attempt {attempt}")
-                return clean
+                stage6_stats["retries"] = max(0, attempt - 1)
+                return clean, stage6_stats
 
             if self._has_syntax_issue(issues):
                 repaired = self._stage6_repair_syntax_only(user_prompt, requirements, clean)
+                stage6_stats["syntax_repairs"] += 1
                 repaired_issues = self._stage6_quality_issues(
                     repaired,
                     user_prompt=user_prompt,
@@ -1051,7 +1142,8 @@ class ProactiveCodeGenerator:
                 )
                 if not repaired_issues:
                     print(f"[Stage 6] Syntax repair succeeded after attempt {attempt}")
-                    return repaired
+                    stage6_stats["retries"] = max(0, attempt - 1)
+                    return repaired, stage6_stats
 
             print(
                 f"[Stage 6] WARNING: Attempt {attempt}/{self.MAX_STAGE6_REGEN_ATTEMPTS} "
@@ -1075,7 +1167,10 @@ class ProactiveCodeGenerator:
         fallback = self._fallback_code_from_prompt(user_prompt, requirements)
         fallback = self._strip_code_fences(fallback)
         print("[Stage 6] Fallback template code generated after repeated low-quality LLM output")
-        return fallback if fallback.strip() else self._minimal_safe_script(user_prompt)
+        stage6_stats["used_fallback"] = True
+        stage6_stats["retries"] = self.MAX_STAGE6_REGEN_ATTEMPTS - 1
+        final_code = fallback if fallback.strip() else self._minimal_safe_script(user_prompt)
+        return final_code, stage6_stats
 
     @staticmethod
     def _stage6_template_guidance(user_prompt: str, requirements: dict) -> str:
