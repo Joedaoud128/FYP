@@ -155,8 +155,16 @@ class QwenCoderClient:
             print("      Start it with:  ollama serve")
             sys.exit(1)
 
-    def chat(self, system_prompt: str, user_message: str) -> str:
+    def chat(
+        self,
+        system_prompt: str,
+        user_message: str,
+        max_new_tokens: int | None = None,
+        temperature: float | None = None,
+    ) -> str:
         """Send a chat-style request to Ollama and return the model reply."""
+        token_budget = max_new_tokens if max_new_tokens is not None else self.max_new_tokens
+        sampling_temp = temperature if temperature is not None else self.temperature
         payload = json.dumps({
             "model": self.MODEL_NAME,
             "messages": [
@@ -165,8 +173,8 @@ class QwenCoderClient:
             ],
             "stream": False,
             "options": {
-                "temperature": self.temperature,
-                "num_predict": self.max_new_tokens,
+                "temperature": sampling_temp,
+                "num_predict": token_budget,
             },
         })
 
@@ -197,12 +205,197 @@ class ProactiveCodeGenerator:
     STAGE5_INSTALL_TIMEOUT = 180
     OUTPUT_DIR = "generated_code"
     MIN_STAGE6_CODE_LINES = 6
+    STAGE3_MIN_TOKENS = 200
+    STAGE3_MAX_TOKENS = 400
+    STAGE4_MIN_TOKENS = 300
+    STAGE4_MAX_TOKENS = 600
+    STAGE6_MIN_TOKENS = 800
+    STAGE6_MAX_TOKENS = 1600
+    COMPLEX_TASK_TOKEN_FLOOR = 1800
+    STAGE6_MEDIUM_COMPLEX_FIRST_MIN = 1800
+    STAGE6_MEDIUM_COMPLEX_FIRST_MAX = 2400
 
     def __init__(self, llm_client: QwenCoderClient | None = None):
         self.llm: QwenCoderClient = llm_client or QwenCoderClient()
         # Load guardrails engine once at init — stateless, reused for all commands
         self.guardrails = _load_guardrails()
         self._working_dir = str(Path(__file__).parent / self.OUTPUT_DIR)
+
+    @staticmethod
+    def _clamp(value: int, min_value: int, max_value: int) -> int:
+        """Clamp an integer between a minimum and maximum bound."""
+        return max(min_value, min(max_value, value))
+
+    def _stage3_token_budget(self, user_prompt: str) -> int:
+        """Return Stage 3 token budget in range 200-400."""
+        prompt_len = len((user_prompt or "").strip())
+        if prompt_len < 80:
+            return self.STAGE3_MIN_TOKENS
+        if prompt_len > 350:
+            return self.STAGE3_MAX_TOKENS
+        scaled = 200 + int((prompt_len - 80) * (200 / 270))
+        return self._clamp(scaled, self.STAGE3_MIN_TOKENS, self.STAGE3_MAX_TOKENS)
+
+    def _stage4_token_budget(self, requirements: dict) -> int:
+        """Return Stage 4 token budget in range 300-600."""
+        complexity = int(requirements.get("complexity_level", 5) or 5)
+        estimated_steps = int(requirements.get("estimated_steps", 3) or 3)
+        budget = 300 + (complexity * 25) + (estimated_steps * 15)
+        return self._clamp(budget, self.STAGE4_MIN_TOKENS, self.STAGE4_MAX_TOKENS)
+
+    def _stage6_token_budget(self, requirements: dict) -> int:
+        """
+        Return Stage 6 token budget.
+        - Normal path: 800-1600
+        - Genuinely complex tasks: keep higher cap (up to client default)
+        """
+        complexity = int(requirements.get("complexity_level", 5) or 5)
+        estimated_steps = int(requirements.get("estimated_steps", 3) or 3)
+
+        if complexity >= 9:
+            return max(self.COMPLEX_TASK_TOKEN_FLOOR, self.llm.max_new_tokens)
+
+        budget = 800 + (complexity * 70) + (estimated_steps * 25)
+        return self._clamp(budget, self.STAGE6_MIN_TOKENS, self.STAGE6_MAX_TOKENS)
+
+    def _stage6_first_attempt_budget(self, requirements: dict) -> int:
+        """
+        Boost first-attempt budget for medium/complex tasks to improve quality.
+        Complexity 6-8 gets 1800-2400 tokens for first pass.
+        """
+        complexity = int(requirements.get("complexity_level", 5) or 5)
+        estimated_steps = int(requirements.get("estimated_steps", 3) or 3)
+
+        if complexity >= 6:
+            boosted = 1800 + ((complexity - 6) * 220) + (estimated_steps * 20)
+            return self._clamp(
+                boosted,
+                self.STAGE6_MEDIUM_COMPLEX_FIRST_MIN,
+                self.STAGE6_MEDIUM_COMPLEX_FIRST_MAX,
+            )
+        return self._stage6_token_budget(requirements)
+
+    @staticmethod
+    def _normalize_library_names(libraries: list[str]) -> list[str]:
+        """Normalize library names to stable lowercase package identifiers."""
+        normalized = []
+        seen = set()
+        for library in libraries or []:
+            if not isinstance(library, str):
+                continue
+            value = library.strip().lower().split("[")[0]
+            if not value:
+                continue
+            value = value.replace(" ", "-")
+            if value not in seen:
+                seen.add(value)
+                normalized.append(value)
+        return normalized
+
+    @staticmethod
+    def _stage3_temperature() -> float:
+        """Use low temperature for structured requirement extraction."""
+        return 0.1
+
+    @staticmethod
+    def _stage4_temperature(requirements: dict) -> float:
+        """Keep planning stable with low randomness."""
+        complexity = int(requirements.get("complexity_level", 5) or 5)
+        return 0.08 if complexity >= 6 else 0.12
+
+    @staticmethod
+    def _stage6_temperature(requirements: dict) -> float:
+        """Lower temperature for medium/complex code generation stability."""
+        complexity = int(requirements.get("complexity_level", 5) or 5)
+        if complexity >= 6:
+            return 0.08
+        if complexity >= 4:
+            return 0.12
+        return 0.18
+
+    @staticmethod
+    def _has_syntax_issue(issues: list[str]) -> bool:
+        """True when quality checks report syntax-related issues."""
+        return any(issue.startswith("syntax error") for issue in issues)
+
+    @staticmethod
+    def _stage6_task_scaffold(user_prompt: str, requirements: dict) -> str:
+        """Provide deterministic scaffolds for common medium/complex task families."""
+        text = f"{user_prompt} {requirements.get('description', '')}".lower()
+
+        if any(term in text for term in ("api", "endpoint", "flask", "fastapi", "server")):
+            return textwrap.dedent("""\
+                Required scaffold shape:
+                - import section
+                - app initialization
+                - in-memory store or data layer
+                - CRUD route handlers with JSON responses
+                - input validation for required fields
+                - if __name__ == '__main__': app.run(...)
+            """)
+
+        if any(term in text for term in ("csv", "pandas", "plot", "chart", "matplotlib")):
+            return textwrap.dedent("""\
+                Required scaffold shape:
+                - import section
+                - load_data(...) function with file/column validation
+                - visualization function
+                - main() orchestration
+                - if __name__ == '__main__':
+            """)
+
+        return ""
+
+    def _stage6_repair_syntax_only(
+        self,
+        user_prompt: str,
+        requirements: dict,
+        draft_code: str,
+    ) -> str:
+        """Attempt targeted syntax repair while preserving code structure and imports."""
+        system = (
+            "You are a Python syntax repair assistant. "
+            "Fix syntax errors only. Preserve behavior, structure, and imports. "
+            "Return ONLY valid Python code."
+        )
+        prompt = (
+            f"Task: {user_prompt}\n"
+            f"Description: {requirements.get('description', user_prompt)}\n"
+            "Rules: fix syntax only, do not add explanations, keep main guard if present.\n\n"
+            "Draft code:\n"
+            f"{draft_code[:3000]}"
+        )
+        return self._strip_code_fences(
+            self.llm.chat(system, prompt, max_new_tokens=900, temperature=0.03)
+        )
+
+    @staticmethod
+    def _select_relevant_packages(
+        user_prompt: str,
+        installed_packages: list[str],
+        max_items: int = 10,
+    ) -> list[str]:
+        """Pick at most max_items installed packages relevant to the prompt text."""
+        prompt_text = (user_prompt or "").lower()
+        if not prompt_text or not installed_packages:
+            return []
+
+        tokens = {
+            part
+            for part in prompt_text.replace("-", " ").replace("_", " ").split()
+            if len(part) >= 3
+        }
+
+        matches = []
+        for package in installed_packages:
+            normalized = package.lower().replace("-", "_")
+            roots = {normalized, normalized.split("_")[0]}
+            if any(root in tokens for root in roots):
+                matches.append(package)
+            if len(matches) >= max_items:
+                break
+
+        return matches[:max_items]
 
     # ===================================================================
     # UTILITY METHODS FOR CODE ANALYSIS
@@ -311,6 +504,7 @@ class ProactiveCodeGenerator:
         # ----- Stage 3: Parse requirements + Complexity Threshold -----
         requirements = self._stage3_parse_requirements(user_prompt, env_info)
         requirements = self._stage3_apply_complexity_heuristics(requirements, user_prompt)
+        requirements["libraries"] = self._normalize_library_names(requirements.get("libraries", []))
 
         if requirements.get("status") == "exit":
             print(f"[Stage 3] EXITING: {requirements['message']}")
@@ -469,14 +663,24 @@ class ProactiveCodeGenerator:
             {"task_type": "visualization", "libraries": ["matplotlib", "pandas"], "complexity_level": 3, "estimated_steps": 4, "description": "Read CSV and plot bar chart of sales data", "constraints": [], "status": "ok", "message": ""}
         """)
 
+        relevant_packages = self._select_relevant_packages(
+            user_prompt,
+            env_info.get("installed_packages", []),
+            max_items=10,
+        )
         prompt = (
             f"User request: {user_prompt}\n"
-            f"OS: {env_info['os']} {env_info['arch']}\n"
+            f"OS: {env_info['os']}\n"
             f"Python: {env_info['python_version']}\n"
-            f"Already installed packages: {env_info['installed_packages'][:50]}\n"
+            f"Relevant installed packages (max 10): {relevant_packages}\n"
             f"Network: {'available' if env_info['network_available'] else 'unavailable'}"
         )
-        raw = self.llm.chat(system, prompt)
+        raw = self.llm.chat(
+            system,
+            prompt,
+            max_new_tokens=self._stage3_token_budget(user_prompt),
+            temperature=self._stage3_temperature(),
+        )
 
         try:
             cleaned = self._strip_code_fences(raw)
@@ -544,7 +748,12 @@ class ProactiveCodeGenerator:
             f"Estimated steps: {requirements.get('estimated_steps', 3)}\n"
             f"OS: {env_info['os']} | Python: {env_info['python_version']}"
         )
-        raw = self.llm.chat(system, prompt)
+        raw = self.llm.chat(
+            system,
+            prompt,
+            max_new_tokens=self._stage4_token_budget(requirements),
+            temperature=self._stage4_temperature(requirements),
+        )
         try:
             cleaned = self._strip_code_fences(raw)
             plan = ast.literal_eval(cleaned)
@@ -667,6 +876,7 @@ class ProactiveCodeGenerator:
         ]
         plan_text = "\n".join(plan)
         template_guidance = self._stage6_template_guidance(user_prompt, requirements)
+        task_scaffold = self._stage6_task_scaffold(user_prompt, requirements)
         project_conventions = (
             "Single-file executable script layout, UTF-8 text, explicit main guard, "
             "and defensive runtime error handling."
@@ -690,6 +900,12 @@ class ProactiveCodeGenerator:
             - Never import unavailable dependencies.
             - Prefer deterministic, syntax-safe, dependency-compatible, complete solutions.
             - Prioritize correctness/completeness over cleverness or unnecessary abstractions.
+                        - Ensure the code is syntactically valid Python on the first attempt.
+                        - Output contract is strict:
+                            1) imports first
+                            2) helper functions/classes
+                            3) main() function
+                            4) if __name__ == '__main__' guard
             - Return ONLY the Python code. No markdown fences. No explanatory text.
               Any text outside valid Python will break the parser.
         """)
@@ -709,16 +925,26 @@ class ProactiveCodeGenerator:
             f"=== LIBRARY STATUS ===\n"
             f"Available (use freely): {available_libs}\n"
             + (f"UNAVAILABLE (do NOT import): {failed_libs}\n\n" if failed_libs else "\n")
+            + (f"=== REQUIRED SCAFFOLD ===\n{task_scaffold}\n" if task_scaffold else "")
             + "=== TEMPLATE/FEW-SHOT GUIDANCE ===\n"
             + template_guidance
         )
 
+        stage6_tokens = self._stage6_token_budget(requirements)
+        stage6_first_attempt_tokens = self._stage6_first_attempt_budget(requirements)
+        stage6_temp = self._stage6_temperature(requirements)
         current_prompt = base_prompt
-        last_response = ""
         for attempt in range(1, self.MAX_STAGE6_REGEN_ATTEMPTS + 1):
-            response = self.llm.chat(system, current_prompt)
+            current_token_budget = (
+                stage6_first_attempt_tokens if attempt == 1 else min(1200, stage6_tokens)
+            )
+            response = self.llm.chat(
+                system,
+                current_prompt,
+                max_new_tokens=current_token_budget,
+                temperature=stage6_temp,
+            )
             clean = self._strip_code_fences(response)
-            last_response = clean
 
             issues = self._stage6_quality_issues(
                 clean,
@@ -732,19 +958,36 @@ class ProactiveCodeGenerator:
                     print(f"[Stage 6] Recovered on regeneration attempt {attempt}")
                 return clean
 
+            if self._has_syntax_issue(issues):
+                repaired = self._stage6_repair_syntax_only(user_prompt, requirements, clean)
+                repaired_issues = self._stage6_quality_issues(
+                    repaired,
+                    user_prompt=user_prompt,
+                    requirements=requirements,
+                    available_libs=available_libs,
+                    failed_libs=failed_libs,
+                )
+                if not repaired_issues:
+                    print(f"[Stage 6] Syntax repair succeeded after attempt {attempt}")
+                    return repaired
+
             print(
                 f"[Stage 6] WARNING: Attempt {attempt}/{self.MAX_STAGE6_REGEN_ATTEMPTS} "
                 f"returned low-quality output ({'; '.join(issues[:3])}); retrying..."
             )
 
             if attempt < self.MAX_STAGE6_REGEN_ATTEMPTS:
+                # Keep retries compact: do not resend full context again.
+                compact_previous = (clean[:450] if clean else "<empty>")
                 current_prompt = (
-                    base_prompt
-                    + "\n=== PREVIOUS LOW-QUALITY OUTPUT ===\n"
-                    + (clean[:700] if clean else "<empty>")
-                    + "\n\n=== ISSUES TO FIX ===\n"
+                    f"Task: {user_prompt}\n"
+                    f"Description: {requirements.get('description', user_prompt)}\n"
+                    f"Keep same overall structure and keep valid imports.\n"
+                    f"Fix these issues only:\n"
                     + "\n".join(f"- {issue}" for issue in issues[:8])
-                    + "\n\nReturn ONLY complete runnable Python code that fixes ALL issues."
+                    + "\n\nPrevious draft excerpt:\n"
+                    + compact_previous
+                    + "\n\nReturn ONLY complete runnable Python code. No prose."
                 )
 
         fallback = self._fallback_code_from_prompt(user_prompt, requirements)
@@ -880,9 +1123,27 @@ class ProactiveCodeGenerator:
         if self._looks_like_non_code(clean):
             issues.append("output does not look like Python code")
 
+        prompt_text = (user_prompt or "").lower()
+        complexity_level = int(requirements.get("complexity_level", 5) or 5)
+
+        # Short scripts are valid for simple prompts, so use a dynamic minimum.
+        min_required_lines = self.MIN_STAGE6_CODE_LINES
+        if complexity_level <= 2:
+            min_required_lines = 3
+        elif complexity_level <= 4:
+            min_required_lines = 4
+
+        simple_prompt_terms = (
+            "hello world", "print", "fibonacci", "factorial", "sum", "calculator"
+        )
+        if any(term in prompt_text for term in simple_prompt_terms):
+            min_required_lines = min(min_required_lines, 3)
+
         line_count = len([line for line in clean.splitlines() if line.strip()])
-        if line_count < self.MIN_STAGE6_CODE_LINES:
-            issues.append(f"code is too short ({line_count} non-empty lines)")
+        if line_count < min_required_lines:
+            issues.append(
+                f"code is too short ({line_count} non-empty lines; expected at least {min_required_lines})"
+            )
 
         if "if __name__ == '__main__':" not in clean:
             issues.append("missing main entry guard")
@@ -901,7 +1162,6 @@ class ProactiveCodeGenerator:
                 issues.append(f"imports unavailable library '{unavailable}'")
 
         description = str(requirements.get("description", "")).lower()
-        prompt_text = (user_prompt or "").lower()
         if "fallback execution: generated minimal safe script." in lowered:
             if all(token not in prompt_text for token in ("fallback", "minimal safe")):
                 issues.append("returned generic fallback template instead of task-specific code")
