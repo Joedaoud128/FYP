@@ -243,7 +243,7 @@ class ProactiveCodeGenerator:
     STAGE6_MEDIUM_COMPLEX_FIRST_MIN = 1800
     STAGE6_MEDIUM_COMPLEX_FIRST_MAX = 2400
     PROMPT_MAX_CHARS = 4000
-    PROMPT_INJECTION_BLOCK_THRESHOLD = 2
+    PROMPT_INJECTION_BLOCK_THRESHOLD = 1
     STRICT_PROMPT_INJECTION_BLOCK = True
     LOG_DIR = "logs"
     RUN_STATS_FILE = "pipeline_run_stats.jsonl"
@@ -342,6 +342,9 @@ class ProactiveCodeGenerator:
         lowered = (user_prompt or "").lower()
         patterns = [
             "ignore previous instructions",
+            "ignore all prior instructions",
+            "ignore prior instructions",
+            "ignore earlier instructions",
             "ignore the above",
             "disregard system",
             "bypass safety",
@@ -349,6 +352,9 @@ class ProactiveCodeGenerator:
             "system prompt",
             "reveal hidden",
             "execute this command",
+            "run shell command",
+            "run shell commands",
+            "print hidden",
             "act as root",
             "jailbreak",
         ]
@@ -658,7 +664,13 @@ class ProactiveCodeGenerator:
         if user_prompt:
             # Take first few words and convert to valid filename
             words = user_prompt.lower().split()[:3]
-            sanitized = "_".join(word.strip('.,!?;:') for word in words if word.isalnum() or word[0].isalnum())
+            cleaned_words = []
+            for word in words:
+                normalized = "".join(ch if ch.isalnum() else "_" for ch in word.strip('.,!?;:'))
+                normalized = normalized.strip("_")
+                if normalized:
+                    cleaned_words.append(normalized)
+            sanitized = "_".join(cleaned_words)
             if sanitized:
                 return f"{sanitized}.py"
         
@@ -870,7 +882,8 @@ class ProactiveCodeGenerator:
         try:
             # Intelligently derive filename from code and prompt
             filename = self._derive_filename_from_code(code, user_prompt)
-            return self._write_to_file(code, filename)
+            unique_filename = self._resolve_unique_output_filename(filename)
+            return self._write_to_file(code, unique_filename)
         except Exception as error:
             print(f"[Stage 6] WARNING: Primary save failed: {error}")
             print("[Stage 6] Writing emergency fallback artifact instead")
@@ -883,6 +896,32 @@ class ProactiveCodeGenerator:
             emergency_path = output_dir / f"stage6_emergency_{timestamp}.py"
             emergency_path.write_text(fallback_code, encoding="utf-8")
             return str(emergency_path)
+
+    def _resolve_unique_output_filename(self, filename: str) -> str:
+        """
+        Ensure filename does not overwrite existing output files.
+
+        Deterministic behavior:
+        - First save uses the base filename.
+        - If a collision exists, append _v2, _v3, ... until available.
+        """
+        output_dir = Path(__file__).parent / self.OUTPUT_DIR
+        output_dir.mkdir(exist_ok=True)
+
+        candidate = Path(filename)
+        stem = candidate.stem or "generated_script"
+        suffix = candidate.suffix or ".py"
+
+        primary = output_dir / f"{stem}{suffix}"
+        if not primary.exists():
+            return primary.name
+
+        version = 2
+        while True:
+            versioned = output_dir / f"{stem}_v{version}{suffix}"
+            if not versioned.exists():
+                return versioned.name
+            version += 1
 
     # ===================================================================
     # STAGE IMPLEMENTATIONS
@@ -1051,7 +1090,9 @@ class ProactiveCodeGenerator:
                 safe_plan = [step for step in plan if not self._plan_step_looks_unsafe(step)]
                 if len(safe_plan) < len(plan):
                     print("[Security] Removed unsafe planner step(s) from LLM output")
-                plan = safe_plan
+                plan = safe_plan[:8]
+                if len(safe_plan) > 8:
+                    print("[Security] Trimmed planner output to 8 step(s) maximum")
                 if not plan:
                     raise ValueError("Planner output contained only unsafe steps")
                 # Validate any executable commands the LLM embedded in plan steps
@@ -1146,10 +1187,10 @@ class ProactiveCodeGenerator:
                     pypi_data = json.loads(resp.read())
                     pypi_info = pypi_data.get("info", {}).get("summary", "")
                 status[lib] = "verified_on_pypi"
-                print(f"[Stage 5] '{lib}' verified on PyPI — will install in container")
+                print(f"[Stage 5] '{lib}' verified on PyPI - will install in container")
             except (urllib.error.HTTPError, urllib.error.URLError, OSError):
                 status[lib] = "not_found_on_pypi"
-                print(f"[Stage 5] WARNING: '{lib}' not found on PyPI — will be skipped")
+                print(f"[Stage 5] WARNING: '{lib}' not found on PyPI - will be skipped")
 
         return status
 
@@ -1645,6 +1686,8 @@ if __name__ == "__main__":
     if result["status"] == "success":
         print(f"Saved to: {result.get('file_path', 'N/A')}")
         print(f"Requirements identified: {result.get('requirements', [])}")
+        sys.exit(0)
     else:
         print(f"Failed at Stage {result.get('stage', '?')}")
         print(result.get("error", "Unknown error"))
+        sys.exit(1)
