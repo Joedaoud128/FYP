@@ -163,7 +163,23 @@ class QwenCoderClient:
         max_new_tokens: int | None = None,
         temperature: float | None = None,
     ) -> str:
-        """Send a chat-style request to Ollama and return the model reply."""
+        """Compatibility wrapper that returns only text content."""
+        content, _ = self.chat_with_usage(
+            system_prompt,
+            user_message,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+        )
+        return content
+
+    def chat_with_usage(
+        self,
+        system_prompt: str,
+        user_message: str,
+        max_new_tokens: int | None = None,
+        temperature: float | None = None,
+    ) -> tuple[str, dict]:
+        """Send a chat request and return model reply plus token usage metadata."""
         token_budget = max_new_tokens if max_new_tokens is not None else self.max_new_tokens
         sampling_temp = temperature if temperature is not None else self.temperature
         payload = json.dumps({
@@ -186,8 +202,19 @@ class QwenCoderClient:
              "--max-time", "60"],
             capture_output=True, text=True, timeout=65
         )
-        data = json.loads(result.stdout)
-        return data["message"]["content"].strip()
+        data = json.loads(result.stdout or "{}")
+        if "error" in data:
+            raise RuntimeError(f"Ollama error: {data['error']}")
+
+        content = data.get("message", {}).get("content", "").strip()
+        prompt_tokens = int(data.get("prompt_eval_count", 0) or 0)
+        completion_tokens = int(data.get("eval_count", 0) or 0)
+        usage = {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        }
+        return content, usage
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +247,9 @@ class ProactiveCodeGenerator:
     STRICT_PROMPT_INJECTION_BLOCK = True
     LOG_DIR = "logs"
     RUN_STATS_FILE = "pipeline_run_stats.jsonl"
+    COST_MODE = "equivalent_cloud"
+    EQUIV_INPUT_USD_PER_1M = 0.20
+    EQUIV_OUTPUT_USD_PER_1M = 0.80
 
     def __init__(self, llm_client: QwenCoderClient | None = None):
         self.llm: QwenCoderClient = llm_client or QwenCoderClient()
@@ -361,6 +391,102 @@ class ProactiveCodeGenerator:
         except Exception as error:
             print(f"[Stats] WARNING: Failed to write run stats: {error}")
 
+    def _historical_total_spend_usd(self) -> float:
+        """Read previous logs and return cumulative spend seen so far."""
+        log_path = Path(__file__).parent / self.LOG_DIR / self.RUN_STATS_FILE
+        if not log_path.exists():
+            return 0.0
+
+        total = 0.0
+        try:
+            text = log_path.read_text(encoding="utf-8")
+            separator = "-" * 80
+            chunks = [chunk.strip() for chunk in text.split(separator) if chunk.strip()]
+
+            for chunk in chunks:
+                try:
+                    record = json.loads(chunk)
+                    total += float(record.get("cost", {}).get("run_cost_usd", 0.0) or 0.0)
+                    continue
+                except Exception:
+                    pass
+
+                # Backward compatibility with legacy one-line JSON entries.
+                for line in chunk.splitlines():
+                    line = line.strip()
+                    if line.startswith("{") and line.endswith("}"):
+                        try:
+                            record = json.loads(line)
+                            total += float(record.get("cost", {}).get("run_cost_usd", 0.0) or 0.0)
+                        except Exception:
+                            continue
+        except Exception:
+            return 0.0
+
+        return total
+
+    def _compute_usage_cost(self, usage_by_stage: dict) -> dict:
+        """Compute per-stage and total run costs from token usage."""
+        if self.COST_MODE == "local_zero":
+            input_rate = 0.0
+            output_rate = 0.0
+        else:
+            input_rate = self.EQUIV_INPUT_USD_PER_1M
+            output_rate = self.EQUIV_OUTPUT_USD_PER_1M
+
+        total_prompt_tokens = 0
+        total_completion_tokens = 0
+        run_cost = 0.0
+        stage_costs = {}
+
+        for stage_name, usage in usage_by_stage.items():
+            prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
+            completion_tokens = int(usage.get("completion_tokens", 0) or 0)
+            stage_cost = (
+                (prompt_tokens * input_rate) / 1_000_000
+                + (completion_tokens * output_rate) / 1_000_000
+            )
+            total_prompt_tokens += prompt_tokens
+            total_completion_tokens += completion_tokens
+            run_cost += stage_cost
+            stage_costs[stage_name] = {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": prompt_tokens + completion_tokens,
+                "cost_usd": round(stage_cost, 6),
+            }
+
+        historical = self._historical_total_spend_usd()
+        return {
+            "mode": self.COST_MODE,
+            "input_usd_per_1m_tokens": input_rate,
+            "output_usd_per_1m_tokens": output_rate,
+            "total_prompt_tokens": total_prompt_tokens,
+            "total_completion_tokens": total_completion_tokens,
+            "total_tokens": total_prompt_tokens + total_completion_tokens,
+            "stage_costs": stage_costs,
+            "run_cost_usd": round(run_cost, 6),
+            "project_total_after_run_usd": round(historical + run_cost, 6),
+        }
+
+    @staticmethod
+    def _print_cost_summary(cost: dict) -> None:
+        """Print end-of-run pricing summary."""
+        print("[Cost] Pricing summary:")
+        print(f"       Mode: {cost.get('mode', 'unknown')}")
+        print(
+            f"       Tokens: prompt={cost.get('total_prompt_tokens', 0)}, "
+            f"completion={cost.get('total_completion_tokens', 0)}, total={cost.get('total_tokens', 0)}"
+        )
+        for stage_name, stage_data in cost.get("stage_costs", {}).items():
+            print(
+                f"       {stage_name}: tokens={stage_data.get('total_tokens', 0)} "
+                f"(in={stage_data.get('prompt_tokens', 0)}, out={stage_data.get('completion_tokens', 0)}) "
+                f"cost=${stage_data.get('cost_usd', 0.0):.6f}"
+            )
+        print(f"       Run estimated cost: ${cost.get('run_cost_usd', 0.0):.6f}")
+        print(f"       Projected cumulative: ${cost.get('project_total_after_run_usd', 0.0):.6f}")
+
     @staticmethod
     def _stage3_temperature() -> float:
         """Use low temperature for structured requirement extraction."""
@@ -420,7 +546,7 @@ class ProactiveCodeGenerator:
         user_prompt: str,
         requirements: dict,
         draft_code: str,
-    ) -> str:
+    ) -> tuple[str, dict]:
         """Attempt targeted syntax repair while preserving code structure and imports."""
         system = (
             "You are a Python syntax repair assistant. "
@@ -434,9 +560,13 @@ class ProactiveCodeGenerator:
             "Draft code:\n"
             f"{draft_code[:3000]}"
         )
-        return self._strip_code_fences(
-            self.llm.chat(system, prompt, max_new_tokens=900, temperature=0.03)
+        repaired, usage = self.llm.chat_with_usage(
+            system,
+            prompt,
+            max_new_tokens=900,
+            temperature=0.03,
         )
+        return self._strip_code_fences(repaired), usage
 
     @staticmethod
     def _select_relevant_packages(
@@ -573,6 +703,8 @@ class ProactiveCodeGenerator:
                 "stage6_used_fallback": False,
             },
             "budgets": {},
+            "usage": {},
+            "cost": {},
             "summary": {},
         }
 
@@ -591,6 +723,9 @@ class ProactiveCodeGenerator:
                     "functions_count": len(result.get("functions", [])),
                     "classes_count": len(result.get("classes", [])),
                 }
+
+            run_stats["cost"] = self._compute_usage_cost(run_stats.get("usage", {}))
+            self._print_cost_summary(run_stats["cost"])
             self._write_run_stats(run_stats)
             return result
 
@@ -633,12 +768,13 @@ class ProactiveCodeGenerator:
         print(f"          Disk free: {env_info['disk_free_gb']:.1f} GB")
 
         # ----- Stage 3: Parse requirements + Complexity Threshold -----
-        requirements = self._stage3_parse_requirements(user_prompt, env_info)
+        requirements, stage3_usage = self._stage3_parse_requirements(user_prompt, env_info)
         requirements = self._stage3_apply_complexity_heuristics(requirements, user_prompt)
         requirements["libraries"] = self._normalize_library_names(requirements.get("libraries", []))
         run_stats["stage"] = 3
         run_stats["budgets"]["stage3_max_new_tokens"] = self._stage3_token_budget(user_prompt)
         run_stats["budgets"]["stage3_temperature"] = self._stage3_temperature()
+        run_stats["usage"]["stage3"] = stage3_usage
 
         if requirements.get("status") == "exit":
             print(f"[Stage 3] EXITING: {requirements['message']}")
@@ -666,10 +802,11 @@ class ProactiveCodeGenerator:
 
         # ----- Stage 4: Multi-Step Agentic Planner -----
         # LLM proposes a plan — guardrails validate each proposed command
-        plan = self._stage4_create_plan(requirements, env_info)
+        plan, stage4_usage = self._stage4_create_plan(requirements, env_info)
         run_stats["stage"] = 4
         run_stats["budgets"]["stage4_max_new_tokens"] = self._stage4_token_budget(requirements)
         run_stats["budgets"]["stage4_temperature"] = self._stage4_temperature(requirements)
+        run_stats["usage"]["stage4"] = stage4_usage
         run_stats["summary"]["planner_steps"] = len(plan)
         print(f"[Stage 4] Agentic plan created with {len(plan)} step(s):")
         for step in plan:
@@ -692,6 +829,7 @@ class ProactiveCodeGenerator:
         run_stats["budgets"]["stage6_max_new_tokens"] = stage6_stats.get("base_budget")
         run_stats["budgets"]["stage6_first_attempt_tokens"] = stage6_stats.get("first_attempt_budget")
         run_stats["budgets"]["stage6_temperature"] = stage6_stats.get("temperature")
+        run_stats["usage"]["stage6"] = stage6_stats.get("usage", {})
         run_stats["features"]["stage6_retries"] = stage6_stats.get("retries", 0)
         run_stats["features"]["stage6_syntax_repairs"] = stage6_stats.get("syntax_repairs", 0)
         run_stats["features"]["stage6_used_fallback"] = stage6_stats.get("used_fallback", False)
@@ -792,7 +930,7 @@ class ProactiveCodeGenerator:
             "disk_free_gb": disk_free_gb,
         }
 
-    def _stage3_parse_requirements(self, user_prompt: str, env_info: dict) -> dict:
+    def _stage3_parse_requirements(self, user_prompt: str, env_info: dict) -> tuple[dict, dict]:
         """Stage 3 - Requirement Parser & Intent Classifier."""
         system = textwrap.dedent("""\
             You are a software analysis assistant. Given a user request, extract:
@@ -825,7 +963,7 @@ class ProactiveCodeGenerator:
             f"Relevant installed packages (max 10): {relevant_packages}\n"
             f"Network: {'available' if env_info['network_available'] else 'unavailable'}"
         )
-        raw = self.llm.chat(
+        raw, usage = self.llm.chat_with_usage(
             system,
             prompt,
             max_new_tokens=self._stage3_token_budget(user_prompt),
@@ -844,7 +982,7 @@ class ProactiveCodeGenerator:
             result.setdefault("status", "ok")
             result.setdefault("message", "")
             result["original_prompt"] = user_prompt
-            return result
+            return result, usage
         except Exception:
             return {
                 "task_type": "general",
@@ -857,9 +995,9 @@ class ProactiveCodeGenerator:
                 "message": "",
                 "original_prompt": user_prompt,
                 "_parse_error": f"Could not parse LLM response: {raw[:200]}",
-            }
+            }, usage
 
-    def _stage4_create_plan(self, requirements: dict, env_info: dict) -> list[str]:
+    def _stage4_create_plan(self, requirements: dict, env_info: dict) -> tuple[list[str], dict]:
         """
         Stage 4 - Multi-Step Agentic Planner.
         LLM-proposed plan steps are validated through guardrails.
@@ -900,7 +1038,7 @@ class ProactiveCodeGenerator:
             f"Estimated steps: {requirements.get('estimated_steps', 3)}\n"
             f"OS: {env_info['os']} | Python: {env_info['python_version']}"
         )
-        raw = self.llm.chat(
+        raw, usage = self.llm.chat_with_usage(
             system,
             prompt,
             max_new_tokens=self._stage4_token_budget(requirements),
@@ -919,7 +1057,7 @@ class ProactiveCodeGenerator:
                 # Validate any executable commands the LLM embedded in plan steps
                 # through guardrails (Module 7). This is advisory at planning time.
                 self._validate_plan_commands(plan, requirements)
-                return plan
+                return plan, usage
         except Exception:
             pass
         return [
@@ -927,7 +1065,7 @@ class ProactiveCodeGenerator:
             "2. [search_docs] Review API documentation for key libraries",
             "3. [write_file] Implement the requested functionality with error handling",
             "4. [run_sandbox] Execute and verify correctness",
-        ]
+        ], usage
 
     def _validate_plan_commands(self, plan: list[str], requirements: dict) -> None:
         """
@@ -1102,6 +1240,11 @@ class ProactiveCodeGenerator:
             "retries": 0,
             "syntax_repairs": 0,
             "used_fallback": False,
+            "usage": {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+            },
         }
         current_prompt = base_prompt
         for attempt in range(1, self.MAX_STAGE6_REGEN_ATTEMPTS + 1):
@@ -1109,12 +1252,15 @@ class ProactiveCodeGenerator:
             current_token_budget = (
                 stage6_first_attempt_tokens if attempt == 1 else min(1200, stage6_tokens)
             )
-            response = self.llm.chat(
+            response, usage = self.llm.chat_with_usage(
                 system,
                 current_prompt,
                 max_new_tokens=current_token_budget,
                 temperature=stage6_temp,
             )
+            stage6_stats["usage"]["prompt_tokens"] += usage.get("prompt_tokens", 0)
+            stage6_stats["usage"]["completion_tokens"] += usage.get("completion_tokens", 0)
+            stage6_stats["usage"]["total_tokens"] += usage.get("total_tokens", 0)
             clean = self._strip_code_fences(response)
 
             issues = self._stage6_quality_issues(
@@ -1131,8 +1277,11 @@ class ProactiveCodeGenerator:
                 return clean, stage6_stats
 
             if self._has_syntax_issue(issues):
-                repaired = self._stage6_repair_syntax_only(user_prompt, requirements, clean)
+                repaired, repair_usage = self._stage6_repair_syntax_only(user_prompt, requirements, clean)
                 stage6_stats["syntax_repairs"] += 1
+                stage6_stats["usage"]["prompt_tokens"] += repair_usage.get("prompt_tokens", 0)
+                stage6_stats["usage"]["completion_tokens"] += repair_usage.get("completion_tokens", 0)
+                stage6_stats["usage"]["total_tokens"] += repair_usage.get("total_tokens", 0)
                 repaired_issues = self._stage6_quality_issues(
                     repaired,
                     user_prompt=user_prompt,
