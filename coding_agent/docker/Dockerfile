@@ -20,7 +20,7 @@
 #     --cpus 1                                              \
 #     --user 1000:1000                                      \
 #     -v /host/script.py:/sandbox/script.py:ro             \
-#     agent-sandbox python /sandbox/script.py
+#     agent-sandbox /sandbox/script.py
 #
 # The ESIB_AiCodingAgent.py sets RUNNING_IN_DOCKER=1 so pipeline modules
 # can detect the container environment.
@@ -89,12 +89,18 @@ USER agent
 # ── Environment ───────────────────────────────────────────────────────────────
 # Signal to pipeline modules that we are running inside Docker.
 ENV RUNNING_IN_DOCKER=1
-# Ollama is reachable on the host via the SSH reverse tunnel.
+# Ollama runs on the host; containers reach it via host.docker.internal.
 # Override at runtime: docker run -e OLLAMA_URL=http://host-ip:11434 ...
 ENV OLLAMA_URL=http://host.docker.internal:11434
 ENV OLLAMA_MODEL=qwen2.5-coder:7b
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
+# matplotlib: use non-interactive Agg backend (no display in container)
+# and point config/cache dirs to writable tmpfs so --read-only root works.
+ENV MPLBACKEND=Agg
+ENV MPLCONFIGDIR=/workspace
+ENV XDG_CONFIG_HOME=/workspace
+ENV XDG_CACHE_HOME=/workspace
 
 # ── Healthcheck ───────────────────────────────────────────────────────────────
 # Lightweight check: verify Python and the main entry point load correctly.

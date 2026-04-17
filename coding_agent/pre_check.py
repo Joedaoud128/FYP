@@ -1,35 +1,39 @@
 #!/usr/bin/env python3
 """
-pre_check.py — Pre-Demo Connectivity & Readiness Checker (v2)
+pre_check.py — Environment Setup + Pre-Demo Readiness Checker (v3)
 ====================================================================
-Run this BEFORE the full pipeline to verify every system dependency.
+Two distinct responsibilities are kept clearly separated:
 
-Checks (updated for host-based production setup):
-  1.  Ollama reachable via SSH tunnel (localhost:11434)
+  SETUP ACTIONS  (--setup flag)
+  ─────────────────────────────
+  One-time actions that configure the environment before it can be used.
+  Run once after cloning the repo, or whenever dependencies change.
+
+  S1. Python version ≥ 3.11 enforced (hard requirement from proposal §3.3)
+  S2. Docker daemon running           (required for sandbox image build)
+  S3. pyyaml installed                (only pip dependency; auto-installed)
+  S4. agent-sandbox image built       (auto-built if absent)
+
+  READINESS CHECKS  (default mode)
+  ─────────────────────────────────
+  Passive verification that every system dependency is ready.
+  Run before every demo to confirm nothing has regressed.
+
+  1.  Ollama reachable at localhost:11434
   2.  Required model available (qwen2.5-coder:7b)
   3.  LLM end-to-end call works
-  4.  Required Python modules importable
+  4.  Required Python modules importable (PyYAML, guardrails_engine, orchestrator)
   5.  Docker daemon running
   6.  Docker security flags supported (--tmpfs, --cap-drop, --pids-limit)
   7.  agent-sandbox Docker image built
   8.  Guardrails engine loads and passes a test command
-  9.  ESIB_AiCodingAgent.py is present and importable
+  9.  ESIB_AiCodingAgent.py is present
   10. Workspace write permissions OK
 
-Changes from v1:
-  - Added Docker image existence check (Check 7)
-  - Added security flag smoke-test (Check 6): verifies --tmpfs nosuid,
-    --cap-drop ALL, --security-opt no-new-privileges, --pids-limit, --user
-    are all accepted by the local Docker daemon
-  - Added ESIB_AiCodingAgent.py presence check (Check 9)
-  - Added workspace write-permission check (Check 10)
-  - Restructured output to show version info and environment context
-  - Added RUNNING_IN_DOCKER env-var detection for container-aware output
-  - Exit code 2 when only optional checks fail (Docker), 1 for critical
-
 Usage:
-    python pre_check.py
-    python pre_check.py --strict    # fail on ANY check, including optional
+    python pre_check.py              # readiness checks only (pre-demo)
+    python pre_check.py --setup      # run setup actions, then readiness checks
+    python pre_check.py --strict     # fail on ANY check, including optional
 """
 
 import sys
@@ -52,6 +56,10 @@ OLLAMA_URL     = os.environ.get("OLLAMA_URL",   "http://localhost:11434")
 EXPECTED_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:7b")
 SANDBOX_IMAGE  = os.environ.get("SANDBOX_IMAGE", "agent-sandbox")
 IN_DOCKER      = bool(os.environ.get("RUNNING_IN_DOCKER"))
+
+# ── Setup constants ────────────────────────────────────────────────────────────
+DOCKERFILE_DIR = _HERE          # Dockerfile lives alongside pre_check.py
+MIN_PYTHON     = (3, 11)        # minimum version from proposal §3.3
 
 # ── ANSI colours ───────────────────────────────────────────────────────────────
 _USE_COLOR = sys.stdout.isatty() and not IN_DOCKER
@@ -87,6 +95,172 @@ def check(name: str, func, critical: bool = True, optional: bool = False):
     return ok
 
 
+
+# ═════════════════════════════════════════════════════════════════════════════
+# SETUP ACTIONS  (--setup flag only)
+# These functions PERFORM actions (install, build) rather than merely verify.
+# They are called once before the readiness checks when --setup is passed.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def setup_check_python_version():
+    """
+    S1 — Enforce Python ≥ 3.11 (hard requirement, proposal §3.3).
+    This is a gate: if Python is too old, setup stops immediately because
+    nothing else will work correctly.
+    """
+    major, minor = sys.version_info.major, sys.version_info.minor
+    if (major, minor) >= MIN_PYTHON:
+        return True, f"Python {major}.{minor}.{sys.version_info.micro} — meets requirement (≥ 3.11)"
+    return False, (
+        f"Python {major}.{minor} is too old. "
+        f"This project requires Python ≥ {MIN_PYTHON[0]}.{MIN_PYTHON[1]}. "
+        f"Please upgrade your Python interpreter."
+    )
+
+
+def setup_check_docker_daemon():
+    """
+    S2 — Docker daemon must be running before the image can be built.
+    Reuses the same logic as the readiness check but is called in setup
+    context so failures are reported as setup blockers, not readiness warnings.
+    """
+    return check_docker_daemon()
+
+
+def setup_ensure_pyyaml():
+    """
+    S3 — Ensure pyyaml is installed; auto-install if missing.
+    pyyaml is the only pip dependency of the project (guardrails_engine.py
+    imports yaml). Installing it here means the readiness check for
+    guardrails will pass without manual intervention.
+    """
+    try:
+        import yaml  # noqa: F401
+        import importlib.metadata
+        version = importlib.metadata.version("pyyaml")
+        return True, f"pyyaml {version} already installed"
+    except (ImportError, Exception):
+        pass
+
+    print("    → pyyaml not found. Installing...")
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "pyyaml>=6.0",
+             "--quiet", "--disable-pip-version-check"],
+            capture_output=True, text=True, timeout=60,
+        )
+        if result.returncode == 0:
+            return True, "pyyaml installed successfully"
+        return False, f"pip install pyyaml failed: {result.stderr.strip()[:200]}"
+    except subprocess.TimeoutExpired:
+        return False, "pip install timed out after 60s"
+    except Exception as exc:
+        return False, f"pip install failed: {exc}"
+
+
+def setup_ensure_sandbox_image():
+    """
+    S4 — Build the agent-sandbox Docker image if it does not already exist.
+    The Dockerfile must be present in the same directory as pre_check.py.
+    Building is skipped (with a PASS) if the image already exists so that
+    repeated --setup runs are fast.
+    """
+    # First confirm Docker is available
+    try:
+        subprocess.run(["docker", "info"], capture_output=True, timeout=8, check=True)
+    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return False, "Docker not available — cannot build sandbox image"
+
+    # Check whether image already exists
+    inspect = subprocess.run(
+        ["docker", "image", "inspect", SANDBOX_IMAGE],
+        capture_output=True, timeout=10,
+    )
+    if inspect.returncode == 0:
+        return True, f"Image '{SANDBOX_IMAGE}' already exists — skipping build"
+
+    # Image missing: build it
+    dockerfile = os.path.join(DOCKERFILE_DIR, "Dockerfile")
+    if not os.path.isfile(dockerfile):
+        return False, (
+            f"Dockerfile not found at {dockerfile}. "
+            "Cannot build agent-sandbox image."
+        )
+
+    print(f"    → Building '{SANDBOX_IMAGE}' from {dockerfile} (this may take a minute)...")
+    try:
+        build = subprocess.run(
+            ["docker", "build", "-t", SANDBOX_IMAGE, DOCKERFILE_DIR],
+            capture_output=True, text=True, timeout=300,
+        )
+        if build.returncode == 0:
+            return True, f"Image '{SANDBOX_IMAGE}' built successfully"
+        return False, (
+            f"docker build failed (rc={build.returncode}):\n"
+            f"{build.stderr.strip()[:400]}"
+        )
+    except subprocess.TimeoutExpired:
+        return False, "docker build timed out after 300s"
+    except Exception as exc:
+        return False, f"docker build error: {exc}"
+
+
+def run_setup():
+    """
+    Execute all setup actions in order.
+    Returns True if all critical setup steps passed, False otherwise.
+    Prints a clear header/footer distinguishing setup from readiness checks.
+    """
+    print(f"\n{'='*65}")
+    print(f"  SETUP ACTIONS  (--setup)")
+    print(f"{'='*65}\n")
+
+    setup_results = []
+
+    def setup_step(label, func, critical=True):
+        try:
+            ok, msg = func()
+        except Exception as exc:
+            ok, msg = False, str(exc)
+        symbol = PASS if ok else (FAIL if critical else WARN)
+        print(f"  {symbol} {label}: {msg}")
+        setup_results.append((label, ok, critical))
+        return ok
+
+    # S1 — Python version (gate: stop immediately if too old)
+    py_ok = setup_step("S1 Python ≥ 3.11", setup_check_python_version, critical=True)
+    if not py_ok:
+        print(f"\n  ✗ Python version check failed. Upgrade Python before continuing.")
+        print(f"{'='*65}\n")
+        return False
+
+    # S2 — Docker daemon
+    docker_ok = setup_step("S2 Docker daemon running", setup_check_docker_daemon, critical=True)
+
+    # S3 — pyyaml (non-fatal if Docker is down, can still install)
+    setup_step("S3 pyyaml installed", setup_ensure_pyyaml, critical=True)
+
+    # S4 — sandbox image (only if Docker is up)
+    if docker_ok:
+        setup_step("S4 agent-sandbox image", setup_ensure_sandbox_image, critical=False)
+    else:
+        print(f"  {SKIP} S4 agent-sandbox image — skipped (Docker not available)")
+
+    # Summary
+    passed  = sum(1 for _, ok, _ in setup_results if ok)
+    failed  = sum(1 for _, ok, crit in setup_results if not ok and crit)
+    total   = len(setup_results)
+
+    print(f"\n  Setup: {passed}/{total} steps passed", end="")
+    if failed:
+        print(f"  ({failed} critical failed)")
+    else:
+        print("  — environment is ready")
+    print(f"{'='*65}\n")
+
+    return failed == 0
+
+
 # ── Individual check functions ─────────────────────────────────────────────────
 
 def check_ollama_reachable():
@@ -97,7 +271,7 @@ def check_ollama_reachable():
     except Exception:
         return False, (
             f"Cannot reach Ollama at {OLLAMA_URL}. "
-            "Ensure SSH tunnel is active: ssh -R 11434:localhost:11434 <vm-ip>"
+            "Ensure Ollama is running locally: `ollama serve`"
         )
 
 
@@ -229,17 +403,32 @@ def check_sandbox_image():
 
 def check_guardrails():
     try:
-        guardrails_dir = os.path.abspath(os.path.join(_HERE, "..", "guardrails"))
-        cfg_candidates = [
-            os.path.join(_HERE, "guardrails_config.yaml"),
-            os.path.join(_HERE, "src", "guardrails", "guardrails_config.yaml"), 
-        ]
-        cfg = next((c for c in cfg_candidates if os.path.exists(c)), None)
-        if not cfg:
-            return False, "guardrails_config.yaml not found"
+        from pathlib import Path
 
-        sys.path.insert(0, os.path.dirname(cfg))
+        # Resolve all candidates to absolute, symlink-collapsed paths so
+        # os.path.exists() is reliable regardless of CWD or symlinks.
+        cfg_candidates = [
+            Path(_HERE) / "guardrails_config.yaml",                          # flat layout (production)
+            Path(_HERE) / ".." / "guardrails" / "guardrails_config.yaml",    # microservice layout
+            Path(_HERE) / "src" / "guardrails" / "guardrails_config.yaml",   # src layout
+        ]
+        cfg_path = next((p.resolve() for p in cfg_candidates if p.exists()), None)
+        if cfg_path is None:
+            searched = [str(p.resolve()) for p in cfg_candidates]
+            return False, f"guardrails_config.yaml not found. Searched: {searched}"
+
+        cfg = str(cfg_path)
+
+        # Guarantee _HERE and the config's directory are both importable,
+        # regardless of which candidate matched.
+        for import_dir in (_HERE, str(cfg_path.parent)):
+            if import_dir not in sys.path:
+                sys.path.insert(0, import_dir)
+
+        # Force a fresh import in case a previous failed attempt was cached.
+        sys.modules.pop("guardrails_engine", None)
         from guardrails_engine import GuardrailsEngine
+
         engine = GuardrailsEngine(cfg)
         result = engine.validate({
             "caller_service": "preflight",
@@ -247,7 +436,7 @@ def check_guardrails():
             "working_dir":    tempfile.gettempdir(),
         })
         if result["status"] == "PASS":
-            return True, "Engine loaded; test command validated OK"
+            return True, f"Engine loaded from {cfg}; test command validated OK"
         return False, f"Engine loaded but test command failed: {result}"
     except Exception as exc:
         return False, f"Guardrails check failed: {exc}"
@@ -277,15 +466,39 @@ def check_workspace_writable():
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser(description="AI Coding Agent — Pre-flight Check v2")
+    parser = argparse.ArgumentParser(
+        description="AI Coding Agent — Environment Setup + Pre-flight Check v3",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Examples:\n"
+            "  python pre_check.py           # readiness checks only (pre-demo)\n"
+            "  python pre_check.py --setup   # setup actions + readiness checks\n"
+            "  python pre_check.py --strict  # fail on ANY check"
+        ),
+    )
+    parser.add_argument(
+        "--setup", action="store_true",
+        help=(
+            "Run setup actions first (install pyyaml, build Docker image) "
+            "then proceed with readiness checks. Safe to run repeatedly."
+        ),
+    )
     parser.add_argument(
         "--strict", action="store_true",
         help="Exit non-zero if ANY check fails, including optional ones."
     )
     args = parser.parse_args()
 
+    # ── Setup phase (--setup only) ─────────────────────────────────────────────
+    if args.setup:
+        setup_ok = run_setup()
+        if not setup_ok:
+            print("  Setup did not complete successfully. Fix the issues above, then re-run.")
+            return 1
+        print("  Proceeding to readiness checks...\n")
+
     print(f"\n{'='*65}")
-    print(f"  AI Coding Agent — Pre-Flight Check v2")
+    print(f"  AI Coding Agent — Pre-Flight Check v3  (setup={getattr(args, 'setup', False)})")
     print(f"  FYP_26_21 | {__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"  Ollama URL     : {OLLAMA_URL}")
     print(f"  Expected model : {EXPECTED_MODEL}")
@@ -363,7 +576,7 @@ def main():
             parts.append(f"{optional} optional failed")
         print(f"  ({', '.join(parts)})")
     else:
-        print("  — All clear! Ready to run ESIB_AiCodingAgent.py")
+        print("  — All clear! System is ready. Run: python ESIB_AiCodingAgent.py --demo")
 
     if critical:
         print("\n  ✗ Critical failures detected. Resolve before running the agent.")

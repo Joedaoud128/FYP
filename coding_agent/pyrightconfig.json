@@ -1,0 +1,10 @@
+{
+  "extraPaths": [
+    ".",
+    "src/orchestrator",
+    "src/generation",
+    "src/debugging",
+    "src/guardrails",
+    "docker"
+  ]
+}

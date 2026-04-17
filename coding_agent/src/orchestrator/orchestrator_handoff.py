@@ -18,6 +18,7 @@ Author:   Maria (Orchestrator)
 
 import os
 import sys
+import re
 import json
 import shutil
 import logging
@@ -136,6 +137,7 @@ class HandoffValidator:
         self._check_path_security(payload)          # V5
         self._check_venv_if_created(payload)        # V6
         self._check_requirements_consistency(payload)  # V7
+        self._check_interactive_input(payload)      # V8
 
         self.logger.info(
             "Handoff validation PASSED for task: %s",
@@ -235,8 +237,10 @@ class HandoffValidator:
             self.logger.error("V5 FAILED - %s", msg)
             raise PathSecurityError(msg)
 
-        # Check that resolved script path starts with workspace
-        if not script_path.startswith(workspace):
+        # Check that resolved script path starts with workspace + separator
+        # Using os.sep prevents false positives where workspace="/home/project"
+        # would incorrectly match script_path="/home/project-backup/script.py"
+        if not (script_path == workspace or script_path.startswith(workspace + os.sep)):
             msg = (
                 f"Script path '{script_path}' is outside "
                 f"workspace '{workspace}'"
@@ -318,6 +322,44 @@ class HandoffValidator:
                 len(requirements), requirements
             )
 
+    # V8: Check for interactive input() calls (sandbox compatibility)
+    def _check_interactive_input(self, payload: dict) -> None:
+        """V8: Detect and log warning for code with input() calls that won't work in sandbox."""
+        script_path = payload["generated_script"]
+
+        if not os.path.isfile(script_path):
+            self.logger.debug("V8 SKIP - Script file doesn't exist")
+            return
+
+        try:
+            with open(script_path, "r", encoding="utf-8") as f:
+                script_content = f.read()
+        except Exception as e:
+            self.logger.debug("V8 SKIP - Could not read script: %s", e)
+            return
+
+        # Patterns that indicate interactive input unsuitable for sandboxed execution
+        banned_patterns = [
+            r'\binput\s*\(',           # input(...)
+            r'\braw_input\s*\(',       # raw_input(...) (Python 2)
+            r'sys\.stdin\.read',       # sys.stdin.read()
+            r'sys\.stdin\.readline',   # sys.stdin.readline()
+            r'\bgetpass\.getpass',     # getpass.getpass(...)
+        ]
+
+        for i, line in enumerate(script_content.split('\n'), 1):
+            # Skip comments
+            code_part = line.split('#')[0]
+            for pattern in banned_patterns:
+                if re.search(pattern, code_part):
+                    msg = (f"V8 WARNING - Script contains interactive input() at line {i}: '{line.strip()}'. "
+                           "This will fail in sandboxed execution (EOFError). "
+                           "Will trigger debug loop to fix.")
+                    self.logger.warning(msg)
+                    return  # Log warning but don't fail — let execution reveal the issue
+
+        self.logger.debug("V8 PASSED - No dangerous interactive input detected")
+
 
 # ──────────────────────────────────────────────
 # EnvironmentPreparer (Schema A → Schema B)
@@ -381,6 +423,13 @@ class EnvironmentPreparer:
             exec_context["python_executable"],
             len(exec_context.get("pending_installs", []))
         )
+
+        # Forward original_prompt if present so the debugger always has
+        # access to the user's raw intent (Change 1 — Phase 6 Orchestrator
+        # optimisations). Placed at top level so it is immediately visible
+        # to CodeDebugger without nested dict traversal.
+        if "original_prompt" in payload:
+            exec_context["original_prompt"] = payload["original_prompt"]
 
         return exec_context
 

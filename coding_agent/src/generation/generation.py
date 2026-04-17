@@ -31,7 +31,6 @@ import json
 import os
 import platform
 import shutil
-import socket
 import subprocess
 import sys
 import textwrap
@@ -136,12 +135,20 @@ class QwenCoderClient:
     def _check_ollama(self):
         """Verify Ollama is running and the required model is pulled."""
         try:
-            # Use curl instead of urllib as urllib has issues with SSH tunnels
+            # Use curl instead of urllib for reliable Ollama API communication
             result = subprocess.run(
                 ["curl", "-s", f"{self.OLLAMA_BASE}/api/tags"],
                 capture_output=True, text=True, timeout=10
             )
-            data = json.loads(result.stdout)
+            raw_output = (result.stdout or "").strip()
+            if not raw_output:
+                print("[LLM] WARNING: Ollama returned empty response — may not be ready")
+                return
+            try:
+                data = json.loads(raw_output)
+            except json.JSONDecodeError:
+                print(f"[LLM] WARNING: Ollama returned invalid JSON: {raw_output[:200]}")
+                return
             model_names = [m["name"] for m in data.get("models", [])]
             base_name = self.MODEL_NAME.split(":")[0]
             found = any(base_name in m for m in model_names)
@@ -152,9 +159,10 @@ class QwenCoderClient:
                 print(f"       Available models: {model_names}")
                 print(f"       Run:  ollama pull {self.MODEL_NAME}")
         except OSError:
-            print("[LLM] ERROR: Cannot connect to Ollama at localhost:11434")
-            print("      Start it with:  ollama serve")
-            sys.exit(1)
+            raise RuntimeError(
+                "Cannot connect to Ollama at localhost:11434. "
+                "Start it with: ollama serve"
+            )
 
     def chat(
         self,
@@ -202,7 +210,19 @@ class QwenCoderClient:
              "--max-time", "60"],
             capture_output=True, text=True, timeout=65
         )
-        data = json.loads(result.stdout or "{}")
+        raw_output = (result.stdout or "").strip()
+        if not raw_output:
+            raise RuntimeError(
+                "Ollama API returned empty response. "
+                "Verify Ollama is running and reachable at " + self.OLLAMA_BASE
+            )
+        try:
+            data = json.loads(raw_output)
+        except json.JSONDecodeError as e:
+            raise RuntimeError(
+                f"Ollama API returned invalid JSON: {e}. "
+                f"Raw output (first 200 chars): {raw_output[:200]}"
+            )
         if "error" in data:
             raise RuntimeError(f"Ollama error: {data['error']}")
 
@@ -739,6 +759,12 @@ class ProactiveCodeGenerator:
             run_stats["cost"] = self._compute_usage_cost(run_stats.get("usage", {}))
             self._print_cost_summary(run_stats["cost"])
             self._write_run_stats(run_stats)
+            # Thread token/cost data and generation flags into the result dict
+            # so the orchestrator and ESIB entry point can build per-run stats.
+            result["token_usage"]        = run_stats["cost"]
+            result["injection_detected"] = run_stats["features"].get("prompt_injection_blocked", False)
+            result["syntax_repairs"]     = run_stats["features"].get("stage6_syntax_repairs", 0)
+            result["fallback_used"]      = run_stats["features"].get("stage6_used_fallback", False)
             return result
 
         # ----- Stage 1: Accept user input -----
@@ -833,6 +859,11 @@ class ProactiveCodeGenerator:
         for lib, status in library_status.items():
             print(f"          {lib}: {status}")
 
+        # ----- Stage 5b: Create venv and install dependencies -----
+        venv_result = self._stage5b_create_venv(identified_libraries, library_status)
+        run_stats["features"]["venv_created"] = venv_result["venv_created"]
+        run_stats["features"]["venv_path"] = venv_result.get("venv_path")
+
         # ----- Stage 6: Code Generator -----
         code, stage6_stats = self._stage6_generate_code(
             user_prompt, requirements, env_info, plan, library_status
@@ -866,6 +897,8 @@ class ProactiveCodeGenerator:
             "description": requirements.get("description", user_prompt),
             "functions": functions,
             "classes": classes,
+            "venv_created": venv_result["venv_created"],
+            "venv_path": venv_result.get("venv_path"),
         })
 
     def _persist_stage6_artifact(self, code: str, user_prompt: str) -> str:
@@ -946,9 +979,14 @@ class ProactiveCodeGenerator:
 
         network_available = False
         try:
-            socket.create_connection(("8.8.8.8", 53), timeout=3)
+            # Use HTTP HEAD to PyPI instead of raw socket — works inside Docker
+            # and behind firewalls that block raw TCP to port 53
+            req = urllib.request.Request(
+                "https://pypi.org/simple/", method="HEAD"
+            )
+            urllib.request.urlopen(req, timeout=5)
             network_available = True
-        except OSError:
+        except Exception:
             pass
 
         disk_free_gb = 0.0
@@ -1194,6 +1232,69 @@ class ProactiveCodeGenerator:
 
         return status
 
+    def _stage5b_create_venv(self, libraries: list[str], library_status: dict) -> dict:
+        """
+        Stage 5b - Create an isolated venv and install third-party dependencies.
+
+        Only installs libraries whose status is "verified_on_pypi".
+        Libraries already "installed" or from "stdlib" are skipped.
+
+        Returns:
+            {"venv_created": True,  "venv_path": str(venv_path)}  on success
+            {"venv_created": False, "venv_path": None}             on skip or failure
+        """
+        try:
+            to_install = [
+                lib for lib in libraries
+                if library_status.get(lib) == "verified_on_pypi"
+            ]
+
+            if not to_install:
+                print("[Stage 5b] No third-party installs needed — skipping venv creation")
+                return {"venv_created": False, "venv_path": None}
+
+            venv_path = Path(__file__).parent / self.OUTPUT_DIR / "venv"
+            print(f"[Stage 5b] Creating venv at: {venv_path}")
+
+            if venv_path.exists():
+                shutil.rmtree(venv_path)
+
+            create_result = subprocess.run(
+                [sys.executable, "-m", "venv", str(venv_path)],
+                capture_output=True,
+            )
+            if create_result.returncode != 0:
+                print(
+                    f"[Stage 5b] WARNING: venv creation failed: "
+                    f"{create_result.stderr.decode(errors='replace').strip()}"
+                )
+                return {"venv_created": False, "venv_path": None}
+
+            if sys.platform == "win32":
+                venv_python = venv_path / "Scripts" / "python.exe"
+            else:
+                venv_python = venv_path / "bin" / "python"
+
+            print(f"[Stage 5b] Installing into venv: {to_install}")
+            pip_result = subprocess.run(
+                [str(venv_python), "-m", "pip", "install"] + to_install,
+                timeout=120,
+                capture_output=True,
+            )
+            if pip_result.returncode != 0:
+                print(
+                    f"[Stage 5b] WARNING: pip install failed: "
+                    f"{pip_result.stderr.decode(errors='replace').strip()}"
+                )
+                return {"venv_created": False, "venv_path": None}
+
+            print(f"[Stage 5b] Venv ready: {venv_python}")
+            return {"venv_created": True, "venv_path": str(venv_path)}
+
+        except Exception as exc:
+            print(f"[Stage 5b] WARNING: venv creation failed: {exc}")
+            return {"venv_created": False, "venv_path": None}
+
     def _stage6_generate_code(
         self,
         user_prompt: str,
@@ -1237,6 +1338,11 @@ class ProactiveCodeGenerator:
             - Never import unavailable dependencies.
             - Prefer deterministic, syntax-safe, dependency-compatible, complete solutions.
             - Prioritize correctness/completeness over cleverness or unnecessary abstractions.
+            - NEVER use input() or sys.stdin.read(). The script runs non-interactively
+              inside a Docker container with no stdin attached. Using input() will cause
+              an EOFError and immediate failure. Hard-code representative values,
+              use argparse with sensible defaults, or generate data programmatically.
+            - NEVER use interactive prompts of any kind (input, getpass, fileinput, etc.).
                         - Ensure the code is syntactically valid Python on the first attempt.
                         - Output contract is strict:
                             1) imports first
@@ -1347,6 +1453,7 @@ class ProactiveCodeGenerator:
                     f"Task: {user_prompt}\n"
                     f"Description: {requirements.get('description', user_prompt)}\n"
                     f"Keep same overall structure and keep valid imports.\n"
+                    f"CRITICAL: NEVER use input() or sys.stdin — script runs non-interactively.\n"
                     f"Fix these issues only:\n"
                     + "\n".join(f"- {issue}" for issue in issues[:8])
                     + "\n\nPrevious draft excerpt:\n"

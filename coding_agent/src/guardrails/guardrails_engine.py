@@ -98,7 +98,7 @@ class PathValidator:
 
         # PATH-01 + PATH-03: Resolve symlinks, then check confinement
         resolved = os.path.realpath(full_path)
-        if not resolved.startswith(self.workspace_root):
+        if not (resolved == self.workspace_root or resolved.startswith(self.workspace_root + os.sep)):
             raise GuardrailReject(
                 f"Path resolves outside workspace: '{raw_path}' -> '{resolved}'",
                 "PATH-01",
@@ -312,7 +312,13 @@ class GuardrailsEngine:
             self._config = yaml.safe_load(f)
 
         g = self._config["global"]
-        self._workspace_root = g["workspace_root"]
+        # Allow runtime override via AGENT_WORKSPACE so the same YAML works
+        # in Docker (/workspace), on Linux dev machines, and in CI without
+        # editing the config file. Falls back to the YAML value if not set.
+        self._workspace_root: str = os.environ.get(
+            "AGENT_WORKSPACE",
+            g["workspace_root"]
+        ) or g["workspace_root"]
         self._blocked_patterns = g["blocked_shell_patterns"]
         self._blocked_expansions = g["blocked_variable_expansions"]
         self._resource_limits = g["resource_limits"]
@@ -498,7 +504,7 @@ class GuardrailsEngine:
         level_str = log_conf.get("log_level", "INFO").upper()
         level = getattr(logging, level_str, logging.INFO)
 
-        entry = {"timestamp": datetime.datetime.utcnow().isoformat()}
+        entry = {"timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat()}
         for field in log_conf.get("fields", []):
             if field == "timestamp":
                 continue

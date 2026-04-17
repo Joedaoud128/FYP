@@ -22,7 +22,7 @@
 # ---------------------------------------------------------------------------
 global:
 
-  workspace_root: "C:/Users/user/Desktop/FYP/coding_agent/workspace"
+  workspace_root: "/workspace"  # override with env var AGENT_WORKSPACE at runtime
 
   resource_limits:
     max_memory_mb: 2048
@@ -198,6 +198,28 @@ commands:
         type: "operand"
         expected: "filepath"
         constraint: "must end with .py and resolve inside workspace"
+    max_tokens: 4
+
+  # Generic Python module command (must come before specific ones like py_compile, ruff)
+  # This allows the debugger to run various python -m <module> commands
+  python_module_generic:
+    executable: "python"
+    category: "deterministic_debug"
+    description: "Execute any Python module with -m flag (py_compile, ruff, pip, ast)."
+    safety: "read_only"
+    token_order_template:
+      - position: 0
+        type: "executable"
+        value: "python"
+      - position: 1
+        type: "flag"
+        allowed: ["-m"]
+      - position: 2
+        type: "subcommand"
+        allowed: ["py_compile", "ruff", "ast", "pip"]
+      - position: 3
+        type: "operand"
+        constraint: "flexible operand"
     max_tokens: 4
 
   python_py_compile:

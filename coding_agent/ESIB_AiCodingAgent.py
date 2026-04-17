@@ -39,6 +39,7 @@ FYP Reference:
 import os
 import sys
 import argparse
+import json
 import logging
 import tempfile
 import time
@@ -51,6 +52,8 @@ for _subdir in [".", "src/orchestrator", "src/generation", "src/debugging", "src
     _p = os.path.abspath(os.path.join(_HERE, _subdir))
     if _p not in sys.path:
         sys.path.insert(0, _p)
+
+import agent_logger as _agent_logger
 
 # ── Agent metadata ─────────────────────────────────────────────────────────────
 AGENT_NAME    = "ESIB AI Coding Agent"
@@ -196,6 +199,7 @@ def run_generate(prompt: str, output_path: str | None = None, logger: logging.Lo
         except Exception as e:
             logger.warning("Could not copy script to output path: %s", e)
 
+    result["_total_time_s"] = round(time.time() - start, 3)
     _print_result("generate", result, start)
     return result
 
@@ -224,6 +228,7 @@ def run_fix(script_path: str, logger: logging.Logger | None = None) -> dict:
     orch   = Orchestrator()
     result = orch.run_debug(abs_path)
 
+    result["_total_time_s"] = round(time.time() - start, 3)
     _print_result("debug", result, start)
     return result
 
@@ -282,6 +287,27 @@ if __name__ == "__main__":
     return results
 
 
+# ── Per-run stats appender ────────────────────────────────────────────────────
+
+def _append_run_stats(stats: dict) -> None:
+    """
+    Append one JSON line to logs/pipeline_run_stats.jsonl.
+
+    Silent — wraps everything in try/except and never prints or raises.
+    Called once per pipeline result from inside _print_summary().
+
+    Args:
+        stats: Dict with the fields defined in Task 3 of the spec.
+    """
+    try:
+        out_path = LOGS_DIR / "pipeline_run_stats.jsonl"
+        LOGS_DIR.mkdir(parents=True, exist_ok=True)
+        with out_path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(stats, ensure_ascii=False, default=str) + "\n")
+    except Exception:
+        pass   # never crash the pipeline
+
+
 # ── Summary printer ────────────────────────────────────────────────────────────
 
 def _print_summary(results: dict, total_elapsed: float) -> int:
@@ -305,6 +331,40 @@ def _print_summary(results: dict, total_elapsed: float) -> int:
         else:
             all_ok = False
             print(f"       Error    : {result.get('error', 'unknown')}")
+
+        # ── Build and append per-run stats (silent) ───────────────────────────
+        _tok = result.get("token_usage") or {}
+        _raw_stages = _tok.get("stage_costs") or {}
+        _stage_costs = {
+            stage: {
+                "tokens":   int(data.get("total_tokens", 0)),
+                "cost_usd": float(data.get("cost_usd", 0.0)),
+            }
+            for stage, data in _raw_stages.items()
+        }
+        _append_run_stats({
+            "timestamp":               datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "task_id":                 result.get("task_id", ""),
+            "mode":                    mode,
+            "status":                  status,
+            "total_time_s":            result.get("_total_time_s", 0.0),
+            "execution_time_s":        result.get("execution_time", 0.0),
+            "exit_code":               result.get("exit_code",
+                                                  0 if status == "SUCCESS" else 1),
+            "prompt_tokens":           int(_tok.get("total_prompt_tokens", 0)),
+            "completion_tokens":       int(_tok.get("total_completion_tokens", 0)),
+            "total_tokens":            int(_tok.get("total_tokens", 0)),
+            "estimated_cost_usd":      float(_tok.get("run_cost_usd", 0.0)),
+            "projected_cumulative_usd": float(_tok.get("project_total_after_run_usd", 0.0)),
+            "stage_costs":             _stage_costs,
+            "injection_detected":      bool(result.get("injection_detected", False)),
+            "syntax_repairs":          int(result.get("syntax_repairs", 0)),
+            "fallback_used":           bool(result.get("fallback_used", False)),
+            "handoff_retries":         int(result.get("handoff_retries", 0)),
+            "venv_created":            bool(result.get("venv_created", False)),
+            "docker_used":             bool(result.get("docker_used", False)),
+        })
+
     print()
     return 0 if all_ok else 1
 
