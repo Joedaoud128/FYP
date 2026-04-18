@@ -8,7 +8,7 @@
 > Autonomous LLM agent for proactive code generation and reactive debugging
 
 **Project:** FYP 26/21 - École Supérieure d'Ingénieurs de Beyrouth (USJ)  
-**Supervisor:** Anthony Assi
+**Supervisor:** Mr.Anthony Assi
 
 ---
 
@@ -44,7 +44,7 @@ ESIB AI Coding Agent is an autonomous AI system that generates Python code from 
 
 ---
 
-## Quick Start
+## Quick Start (**Full documentation:** See [QUICKSTART.md](QUICKSTART.md))
 
 ### Prerequisites
 
@@ -58,10 +58,13 @@ ESIB AI Coding Agent is an autonomous AI system that generates Python code from 
 git clone https://github.com/Joedaoud128/FYP.git
 cd FYP/coding_agent
 
-# Run setup (downloads models, sets up environment)
+# Run setup
 ./setup.sh              # Linux/Mac
-setup.bat               # Windows
+.\setup.bat             # Windows PowerShell
+setup.bat               # Windows CMD
 ```
+
+**Windows users:** If using PowerShell (default terminal), use `.\setup.bat`. If using CMD, use `setup.bat`.
 
 The setup script will:
 - ✅ Verify Docker and Ollama are running
@@ -72,10 +75,19 @@ The setup script will:
 
 ### Quick Demo
 
+**Linux/Mac:**
 ```bash
-# Run demo scenarios
-./run.sh demo           # Linux/Mac
-run.bat demo            # Windows
+./run.sh demo
+```
+
+**Windows (PowerShell):**
+```powershell
+.\run.bat demo
+```
+
+**Windows (CMD):**
+```cmd
+run.bat demo
 ```
 
 ### Basic Usage
@@ -511,10 +523,10 @@ If you use this work in your research, please cite:
 ```bibtex
 @project{esib-ai-agent-2026,
   title={AI Coding Agent: An Autonomous LLM Agent for Proactive Code Generation and Reactive Debugging},
-  author={Sabbagh, Maria and Daoud, Joe Anthony and Rached, Raymond and Nassar, Elise},
+  author={Maria Sabbagh, Joe-Anthony Daoud and Raymond Rached and Elise Nassar},
   year={2026},
   school={École Supérieure d'Ingénieurs de Beyrouth, Université Saint-Joseph de Beyrouth},
-  supervisor={Assi, Anthony},
+  supervisor={Mr.Anthony Assi},
   type={Final Year Project},
   number={FYP 26/21}
 }

@@ -59,10 +59,17 @@ chmod +x setup.sh run.sh
 ./setup.sh
 ```
 
-**On Windows:**
-```batch
+**On Windows (PowerShell):**
+```powershell
+.\setup.bat
+```
+
+**On Windows (CMD):**
+```cmd
 setup.bat
 ```
+
+**Note for Windows users:** If using PowerShell (default), you must use `.\` before commands. If using CMD, you can run directly.
 
 **What the setup does:**
 1. ✅ Checks Docker is running
@@ -82,11 +89,18 @@ setup.bat
 
 ### Step 3: Verify Installation
 
+**Linux/Mac:**
 ```bash
-# Linux/Mac
 ./run.sh check
+```
 
-# Windows
+**Windows (PowerShell):**
+```powershell
+.\run.bat check
+```
+
+**Windows (CMD):**
+```cmd
 run.bat check
 ```
 
@@ -128,25 +142,74 @@ docker pull mariasabbagh1/esib-ai-agent:latest
 ### Option 1: Convenience Wrapper Scripts (Easiest)
 
 **Run a demo:**
+
+*Linux/Mac:*
 ```bash
-./run.sh demo           # Linux/Mac
-run.bat demo            # Windows
+./run.sh demo
+```
+
+*Windows (PowerShell):*
+```powershell
+.\run.bat demo
+```
+
+*Windows (CMD):*
+```cmd
+run.bat demo
 ```
 
 **Generate code with default model:**
+
+*Linux/Mac:*
 ```bash
 ./run.sh generate "Write a web scraper for Hacker News"
 ```
 
+*Windows (PowerShell):*
+```powershell
+.\run.bat generate "Write a web scraper for Hacker News"
+```
+
+*Windows (CMD):*
+```cmd
+run.bat generate "Write a web scraper for Hacker News"
+```
+
 **Generate code with specific model:**
+
+*Linux/Mac:*
 ```bash
 ./run.sh generate "Build a REST API with Flask" qwen3:8b
 ```
 
+*Windows (PowerShell):*
+```powershell
+.\run.bat generate "Build a REST API with Flask" qwen3:8b
+```
+
+*Windows (CMD):*
+```cmd
+run.bat generate "Build a REST API with Flask" qwen3:8b
+```
+
 **Debug a script:**
+
+*Linux/Mac:*
 ```bash
 ./run.sh debug demos/03_broken_script.py
 ./run.sh debug my_script.py qwen3:8b
+```
+
+*Windows (PowerShell):*
+```powershell
+.\run.bat debug demos\03_broken_script.py
+.\run.bat debug my_script.py qwen3:8b
+```
+
+*Windows (CMD):*
+```cmd
+run.bat debug demos\03_broken_script.py
+run.bat debug my_script.py qwen3:8b
 ```
 
 ---
@@ -580,7 +643,7 @@ A: The system automatically retries with guardrails validation. Check logs for d
 - Joe Anthony Daoud — Code Generation
 - Raymond Rached — Code Debugging
 - Elise Nassar — Security & Guardrails
-- Maria — Orchestration & Docker Execution
+- Maria Sabbagh — Orchestration & Docker Execution
 
 ---
 
