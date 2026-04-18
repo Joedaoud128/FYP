@@ -1,0 +1,1 @@
+Write a Python calculator that can add, subtract, multiply, and divide two numbers. Include error handling for division by zero. The script should prompt the user for two numbers and an operation, then display the result.

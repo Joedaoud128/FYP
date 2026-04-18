@@ -1,0 +1,1 @@
+Create a Python script that scrapes the top 10 stories from Hacker News (news.ycombinator.com). Extract the title, URL, and score for each story. Save the results to a JSON file named 'hn_top_stories.json'. Include error handling and rate limiting.

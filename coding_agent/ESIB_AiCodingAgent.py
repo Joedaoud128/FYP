@@ -450,6 +450,13 @@ Examples:
         help="Enable DEBUG-level logging from all pipeline modules.",
     )
 
+    parser.add_argument(
+    "--model", "-m",
+    choices=["qwen2.5-coder:7b", "qwen3:8b"],
+    default="qwen2.5-coder:7b",
+    help="LLM model to use for code generation and debugging. Default: qwen2.5-coder:7b",
+    )
+
     return parser
 
 
@@ -493,6 +500,12 @@ def main() -> int:
         else:
             logger.info("Environment: host")
 
+        # Set model environment variable if specified
+        if hasattr(args, 'model') and args.model:
+            os.environ["OLLAMA_MODEL"] = args.model
+            logger.info("Model      : %s", args.model)
+
+        
         # ── Dispatch ──────────────────────────────────────────────────────────
         if args.generate:
             results["generate"] = run_generate(

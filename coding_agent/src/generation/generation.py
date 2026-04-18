@@ -123,9 +123,9 @@ class QwenCoderClient:
     Model: qwen2.5-coder:7b  (pull with: ollama pull qwen2.5-coder:7b)
     """
 
-    OLLAMA_BASE = "http://localhost:11434"
+    OLLAMA_BASE = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
     OLLAMA_CHAT = f"{OLLAMA_BASE}/api/chat"
-    MODEL_NAME = "qwen2.5-coder:7b"
+    MODEL_NAME = os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:7b")
 
     def __init__(self, max_new_tokens: int = 2048, temperature: float = 0.2):
         self.max_new_tokens = max_new_tokens
