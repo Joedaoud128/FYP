@@ -1,650 +1,487 @@
-# ESIB AI Coding Agent - Quick Start Guide
+# Quick Start Guide
 
-## Overview
-
-This is an autonomous AI coding agent that can:
-- **Generate** Python code from natural language descriptions
-- **Debug** broken Python scripts automatically
-- Run in a **secure Docker sandbox**
-- Use two different AI models: `qwen2.5-coder:7b` or `qwen3:8b`
-
-**Project:** FYP 26/21 - École Supérieure d'Ingénieurs de Beyrouth (USJ)
+Get the ESIB AI Coding Agent running in under 10 minutes.
 
 ---
 
-## Prerequisites
+## Prerequisites Check
 
-Install these two tools before starting:
+**BEFORE running setup, verify these are installed and running:**
 
-### 1. Docker Desktop
-- **Windows/Mac:** Download from https://www.docker.com/products/docker-desktop
-- **Linux:** Install Docker Engine via your package manager
+### 1. Python 3.8+
 
-**Verify installation:**
 ```bash
-docker --version
+python --version
+```
+**Expected:** `Python 3.8.x` or higher
+
+**If not installed:**
+- Download from [python.org](https://python.org)
+- **Windows:** Check "Add Python to PATH" during installation
+- Restart terminal after installation
+
+---
+
+### 2. Docker Desktop (Running)
+
+```bash
 docker ps
 ```
+**Expected:** Table of containers (even if empty) without errors
 
-### 2. Ollama
-- **All platforms:** Download from https://ollama.ai
-- **Windows/Mac:** Starts automatically after installation
-- **Linux:** Run `ollama serve` in a separate terminal
+**If error or not installed:**
 
-**Verify installation:**
+**Windows/Mac:**
+1. Download [Docker Desktop](https://www.docker.com/products/docker-desktop)
+2. Install and restart computer
+3. **Start Docker Desktop** (important!)
+4. Wait for "Docker Desktop is running" message
+
+**Linux:**
 ```bash
-ollama --version
-curl http://localhost:11434/api/tags
+sudo apt-get update
+sudo apt-get install docker.io
+sudo systemctl start docker
+sudo usermod -aG docker $USER  # Then log out and back in
 ```
 
 ---
 
-## Installation (5-10 minutes)
-
-### Step 1: Download the Project
+### 3. Ollama (Running)
 
 ```bash
-# Clone the repository
+curl http://localhost:11434
+```
+**Expected:** `Ollama is running`
+
+**If error or not installed:**
+
+**Windows:**
+1. Download from [ollama.com/download](https://ollama.com/download)
+2. Run installer
+3. Ollama starts automatically on port 11434
+
+**Linux:**
+```bash
+curl -fsSL https://ollama.com/install.sh | sh
+```
+
+**macOS:**
+1. Download from [ollama.com/download](https://ollama.com/download)
+2. Install .dmg file
+
+**To start Ollama (Linux/Mac):**
+```bash
+ollama serve &
+```
+
+---
+
+## Installation
+
+### Windows (PowerShell or CMD)
+
+```powershell
+# 1. Clone repository
+git clone https://github.com/Joedaoud128/FYP.git
+cd FYP\coding_agent
+
+# 2. Run setup (takes 5-10 min, downloads ~10GB models)
+.\setup.bat
+
+# 3. Verify installation
+python pre_check.py
+```
+
+### Linux / macOS
+
+```bash
+# 1. Clone repository
 git clone https://github.com/Joedaoud128/FYP.git
 cd FYP/coding_agent
 
-# Or download and extract the ZIP file
-```
+# 2. Make setup executable
+chmod +x setup.sh
 
-### Step 2: Run Setup
-
-**On Linux/Mac:**
-```bash
-chmod +x setup.sh run.sh
+# 3. Run setup (takes 5-10 min, downloads ~10GB models)
 ./setup.sh
+
+# 4. Verify installation
+python pre_check.py
 ```
 
-**On Windows (PowerShell):**
+---
+
+## What Setup Does
+
+The automated setup script:
+
+1. ✅ **Creates virtual environment** (.venv)
+2. ✅ **Installs Python dependencies** (pyyaml)
+3. ✅ **Pulls AI models** (qwen3:8b ~4.7GB, qwen2.5-coder:7b ~4.7GB)
+4. ✅ **Builds Docker image** (agent-sandbox)
+5. ✅ **Creates required directories** (logs/, demos/, docs/)
+6. ✅ **Verifies system health**
+
+**Total time:** 5-10 minutes  
+**Total download:** ~10GB
+
+---
+
+## First Run - Generation Mode
+
+Create code from natural language prompts.
+
+### Simple Example
+
+```bash
+python ESIB_AiCodingAgent.py --generate "Create a simple calculator"
+```
+
+**What happens:**
+1. LLM generates Python code
+2. Code is validated by guardrails
+3. Code runs in Docker sandbox
+4. Working script saved to `src/generation/generated_code/`
+
+### Complex Example
+
+```bash
+python ESIB_AiCodingAgent.py --generate "Build a web scraper that extracts article titles and summaries from a news website, handles pagination, and saves results to CSV"
+```
+
+### Using the Convenience Wrapper
+
+**Windows:**
 ```powershell
-.\setup.bat
+.\run.bat generate "Create a REST API with error handling"
 ```
-
-**On Windows (CMD):**
-```cmd
-setup.bat
-```
-
-**Note for Windows users:** If using PowerShell (default), you must use `.\` before commands. If using CMD, you can run directly.
-
-**What the setup does:**
-1. ✅ Checks Docker is running
-2. ✅ Checks Ollama is running
-3. ✅ Downloads AI models (~10GB total, first time only)
-   - `qwen2.5-coder:7b` (~4.7GB) - Default model
-   - `qwen3:8b` (~5.0GB) - Alternative model
-4. ✅ Downloads pre-built Docker image from Docker Hub (~200MB)
-   - **OR** builds locally if download fails (automatic fallback)
-5. ✅ Installs Python dependencies (only `pyyaml`)
-6. ✅ Creates necessary directories
-
-**Expected time:**
-- First time: 10-15 minutes (downloads models + Docker image)
-- Subsequent runs: < 1 minute (everything cached)
-- Docker image download: ~30 seconds (vs 2 minutes if building locally)
-
-### Step 3: Verify Installation
 
 **Linux/Mac:**
 ```bash
-./run.sh check
-```
-
-**Windows (PowerShell):**
-```powershell
-.\run.bat check
-```
-
-**Windows (CMD):**
-```cmd
-run.bat check
-```
-
-**Expected output:**
-```
-✅ Docker Engine         Docker is running
-✅ Ollama Service        Ollama is running on port 11434
-✅ AI Models             Both models available: qwen2.5-coder:7b, qwen3:8b
-✅ Docker Image          Docker image 'agent-sandbox' exists
-✅ Python Dependencies   Python dependencies installed
-
-System is ready to run!
+./run.sh generate "Create a REST API with error handling"
 ```
 
 ---
 
-## Docker Image Distribution
+## First Run - Debug Mode
 
-Our production-ready Docker image is available on Docker Hub for faster setup.
+Automatically detect and fix errors in broken scripts.
 
-**Registry:** [mariasabbagh1/esib-ai-agent](https://hub.docker.com/r/mariasabbagh1/esib-ai-agent)
+### Example with Demo Script
 
-**Benefits:**
-- ✅ Faster setup (~30 seconds vs 2 minutes)
-- ✅ Guaranteed identical environment
-- ✅ Production-grade deployment
-
-**Manual pull (optional):**
 ```bash
-docker pull mariasabbagh1/esib-ai-agent:latest
+python ESIB_AiCodingAgent.py --fix demos/03_broken_script.py
 ```
 
-**Note:** The setup script automatically handles this. You don't need to pull manually.
+**What happens:**
+1. Script runs → error detected
+2. LLM analyzes error and generates fix
+3. Fix is validated
+4. Fixed script tested
+5. If successful, fixed version saved
 
----
+### Using the Convenience Wrapper
 
-## Usage
-
-### Option 1: Convenience Wrapper Scripts (Easiest)
-
-**Run a demo:**
-
-*Linux/Mac:*
-```bash
-./run.sh demo
-```
-
-*Windows (PowerShell):*
+**Windows:**
 ```powershell
-.\run.bat demo
+.\run.bat fix demos\03_broken_script.py
 ```
 
-*Windows (CMD):*
-```cmd
-run.bat demo
-```
-
-**Generate code with default model:**
-
-*Linux/Mac:*
+**Linux/Mac:**
 ```bash
-./run.sh generate "Write a web scraper for Hacker News"
-```
-
-*Windows (PowerShell):*
-```powershell
-.\run.bat generate "Write a web scraper for Hacker News"
-```
-
-*Windows (CMD):*
-```cmd
-run.bat generate "Write a web scraper for Hacker News"
-```
-
-**Generate code with specific model:**
-
-*Linux/Mac:*
-```bash
-./run.sh generate "Build a REST API with Flask" qwen3:8b
-```
-
-*Windows (PowerShell):*
-```powershell
-.\run.bat generate "Build a REST API with Flask" qwen3:8b
-```
-
-*Windows (CMD):*
-```cmd
-run.bat generate "Build a REST API with Flask" qwen3:8b
-```
-
-**Debug a script:**
-
-*Linux/Mac:*
-```bash
-./run.sh debug demos/03_broken_script.py
-./run.sh debug my_script.py qwen3:8b
-```
-
-*Windows (PowerShell):*
-```powershell
-.\run.bat debug demos\03_broken_script.py
-.\run.bat debug my_script.py qwen3:8b
-```
-
-*Windows (CMD):*
-```cmd
-run.bat debug demos\03_broken_script.py
-run.bat debug my_script.py qwen3:8b
+./run.sh fix demos/03_broken_script.py
 ```
 
 ---
 
-### Option 2: Direct Entry Point (Full Control)
+## Model Selection
 
-**Generate Mode:**
+### Use Primary Model (qwen3:8b) - Better Quality
+
 ```bash
-# Use default model (qwen2.5-coder:7b)
-python ESIB_AiCodingAgent.py --generate "Write a CSV parser"
-
-# Use specific model
-python ESIB_AiCodingAgent.py --generate "Write a CSV parser" --model qwen3:8b
-
-# Save to custom location
-python ESIB_AiCodingAgent.py --generate "..." --output my_script.py
-
-# Enable verbose logging
-python ESIB_AiCodingAgent.py --generate "..." --verbose
-```
-
-**Debug Mode:**
-```bash
-# Use default model
-python ESIB_AiCodingAgent.py --fix broken_script.py
-
-# Use specific model
-python ESIB_AiCodingAgent.py --fix broken_script.py --model qwen3:8b
-
-# With verbose output
-python ESIB_AiCodingAgent.py --fix broken_script.py --verbose
-```
-
-**Demo Mode:**
-```bash
-# Run all demos
-python ESIB_AiCodingAgent.py --demo
-
-# Run specific demo
-python ESIB_AiCodingAgent.py --demo --demo-mode generate
-python ESIB_AiCodingAgent.py --demo --demo-mode debug
-```
-
-**Help:**
-```bash
-python ESIB_AiCodingAgent.py --help
-```
-
----
-
-## Model Selection Guide
-
-### qwen2.5-coder:7b (Default)
-- **Optimized for:** Code generation and debugging
-- **Size:** 4.7GB
-- **Speed:** Faster responses
-- **Best for:** Most coding tasks, debugging, script generation
-
-### qwen3:8b
-- **Optimized for:** General-purpose tasks
-- **Size:** 5.0GB
-- **Speed:** Slightly slower but more capable
-- **Best for:** Complex logic, API design, architectural planning
-
-**How to choose:**
-- Use **default** for everyday coding tasks
-- Use **qwen3:8b** for more complex or creative tasks
-- Try both and compare results
-
-**Switching models:**
-```bash
-# Environment variable (affects all subsequent commands)
-export OLLAMA_MODEL=qwen3:8b
-python ESIB_AiCodingAgent.py --generate "..."
-
-# Command-line flag (one-time override)
 python ESIB_AiCodingAgent.py --generate "..." --model qwen3:8b
 ```
 
----
-
-## What Happens During Execution?
-
-### Generate Mode Pipeline (6 Stages)
-
-```
-🤖 Starting code generation...
-   Stage 1/6: Prompt validation & sanitization
-   Stage 2/6: Environment detection (Python, OS, packages)
-   Stage 3/6: Requirement parsing & complexity analysis
-   Stage 4/6: Agentic planning with ReAct pattern
-              (LLM uses tools: search_docs, write_file, run_sandbox, install_package)
-   Stage 5/6: Library verification via PyPI + venv creation
-   Stage 6/6: Final code assembly & guardrails check
-   
-✅ Code generated successfully
-📁 Output: generated_code/script.py
-🔒 Security: All commands validated by guardrails
-⏱️  Time: ~25-40 seconds
-```
-
-### Debug Mode Pipeline
-
-```
-🔧 Starting debugging session...
-   📝 Reading script: my_script.py
-   🔍 Analyzing errors (syntax, runtime, logic)
-   🔄 Iteration 1/10: Fixing NameError on line 42
-      - Proposed fix validated by guardrails
-      - Code rewritten deterministically
-      - Testing in Docker sandbox...
-   ✅ Fix successful
-   
-📁 Fixed code: generated_code/script.py
-🔄 Iterations: 1
-⏱️  Time: ~15-30 seconds
-```
-
----
-
-## Example Workflows
-
-### Workflow 1: Quick Code Generation
+### Use Fallback Model (qwen2.5-coder:7b) - Faster
 
 ```bash
-# 1. Generate a script
-./run.sh generate "Parse a CSV file and create a bar chart"
-
-# 2. Check the output
-cat generated_code/script.py
-
-# 3. Run it
-python generated_code/script.py
+python ESIB_AiCodingAgent.py --generate "..." --model qwen2.5-coder:7b
 ```
 
-### Workflow 2: Model Comparison
+### Check Available Models
 
 ```bash
-# Generate with model 1
-./run.sh generate "Build a JSON API client" qwen2.5-coder:7b
-mv generated_code/script.py version1.py
-
-# Generate with model 2
-./run.sh generate "Build a JSON API client" qwen3:8b
-mv generated_code/script.py version2.py
-
-# Compare results
-diff version1.py version2.py
-```
-
-### Workflow 3: Debug → Fix → Verify
-
-```bash
-# 1. Try to run a broken script
-python my_broken_script.py
-# (fails with errors)
-
-# 2. Debug it
-./run.sh debug my_broken_script.py
-
-# 3. Check the fixed version
-python generated_code/script.py
-# (works correctly)
-```
-
----
-
-## Command Reference
-
-### Setup & Verification
-```bash
-./run.sh setup          # First-time setup
-./run.sh check          # Health check
-```
-
-### Code Generation
-```bash
-./run.sh generate 'prompt'          # Use default model
-./run.sh generate 'prompt' qwen3:8b # Use specific model
-```
-
-### Debugging
-```bash
-./run.sh debug script.py            # Use default model
-./run.sh debug script.py qwen3:8b   # Use specific model
-```
-
-### Demos
-```bash
-./run.sh demo           # Run all 3 demo scenarios
-```
-
-### Help
-```bash
-./run.sh help           # Show all commands
-python ESIB_AiCodingAgent.py --help  # Show detailed options
-```
-
----
-
-## Output Locations
-
-```
-project/
-├── generated_code/      # Generated and fixed scripts
-│   ├── script.py        # Latest output
-│   └── venv/            # Auto-created virtual environment
-├── memory_store/        # System learning data
-│   └── memory_store.json
-├── logs/                # Execution logs
-│   ├── generate_*.log
-│   └── debug_*.log
-└── demos/               # Example scenarios
-    ├── 01_calculator.txt
-    ├── 02_web_scraper.txt
-    └── 03_broken_script.py
-```
-
----
-
-## Tips for Best Results
-
-### Writing Good Prompts
-
-**Good prompts:**
-```
-✅ "Write a Python script that fetches weather data from OpenWeatherMap API and displays it"
-✅ "Create a CSV parser that reads sales.csv and calculates total revenue per product"
-✅ "Build a simple REST API client for the JSONPlaceholder API with GET and POST methods"
-```
-
-**Bad prompts:**
-```
-❌ "Make me a website" (too vague, wrong language)
-❌ "Code" (no context)
-❌ "Fix this" (no file provided)
-```
-
-**Prompt guidelines:**
-- Be specific about what you want
-- Mention libraries/frameworks if you have preferences
-- Specify input/output formats
-- Include error handling requirements
-- Provide example data if relevant
-
-### Performance Tips
-
-- **First run:** Slower due to model loading and venv creation
-- **Subsequent runs:** Faster (cached models, reused venv)
-- **GPU acceleration:** Automatically used if available (NVIDIA/AMD)
-- **CPU mode:** Works fine, just slower (~2x)
-
-### Troubleshooting
-
-**"Docker is not running"**
-```bash
-# Start Docker Desktop and wait for it to fully initialize
-# Look for the whale icon in system tray (Windows/Mac)
-docker ps  # Should show empty list, not error
-```
-
-**"Ollama not running on port 11434"**
-```bash
-# Linux/Mac: Start Ollama manually
-ollama serve
-
-# Windows: Ollama should auto-start; if not, reinstall
-
-# Test: Open http://localhost:11434 in browser
-# Should show: "Ollama is running"
-```
-
-**"Model not found"**
-```bash
-# Manually pull the model
-ollama pull qwen2.5-coder:7b
-ollama pull qwen3:8b
-
-# Verify
 ollama list
 ```
 
-**"Docker build failed"**
-```bash
-# Check disk space
-df -h  # Need at least 2GB free
+---
 
-# Rebuild with verbose output
-docker build -t agent-sandbox -f docker/Dockerfile .
-```
+## Common Options
 
-**"Generation fails or hangs"**
 ```bash
-# Enable verbose logging to see what's happening
+# Help
+python ESIB_AiCodingAgent.py --help
+
+# Verbose logging
 python ESIB_AiCodingAgent.py --generate "..." --verbose
+python ESIB_AiCodingAgent.py --fix script.py --verbose
 
-# Check logs
-cat logs/generate_*.log
+# Different model
+python ESIB_AiCodingAgent.py --generate "..." --model qwen3:8b
+
+# System health check
+python pre_check.py
+
+# Using convenience wrapper
+.\run.bat check          # Windows
+./run.sh check           # Linux/Mac
 ```
 
 ---
 
-## System Requirements
+## Troubleshooting
 
-**Minimum:**
-- **OS:** Windows 10/11, macOS 12+, or Linux (Ubuntu 20.04+)
-- **RAM:** 8GB (16GB recommended)
-- **Disk:** 15GB free (models + Docker images)
-- **Docker:** Version 20.10+
-- **Python:** 3.10+
-- **Internet:** Required for first-time model download
+### Setup Fails with "Docker not running"
 
-**Optional (for GPU acceleration):**
-- **NVIDIA GPU** with CUDA support (Linux/Windows)
-- **AMD GPU** with ROCm support (Linux)
+```bash
+# Solution
+# Windows/Mac: Open Docker Desktop and wait for it to start
+# Linux: sudo systemctl start docker
+```
+
+### Setup Fails with "Ollama not responding"
+
+```bash
+# Check if Ollama is running
+curl http://localhost:11434
+
+# If not, start it:
+# Windows: Check system tray, or Start menu → Ollama
+# Linux/Mac: ollama serve &
+```
+
+### Model Download Fails
+
+```bash
+# Pull models manually
+ollama pull qwen3:8b
+ollama pull qwen2.5-coder:7b
+
+# If network is slow, start with smaller model
+ollama pull qwen2.5-coder:7b
+```
+
+### "Python not found"
+
+```bash
+# Add Python to PATH
+# Windows: System Properties → Environment Variables → PATH
+# Add: C:\Python3X\ and C:\Python3X\Scripts\
+
+# Or reinstall Python with "Add to PATH" checked
+```
+
+**For complete troubleshooting:**
+```bash
+# See detailed troubleshooting guide
+cat docs/TROUBLESHOOTING.md
+```
 
 ---
 
-## Advanced Usage
+## What You Get
 
-### Environment Variables
+After setup, you have:
+
+```
+coding_agent/
+├── .venv/                          # Virtual environment
+├── src/
+│   ├── generation/
+│   │   └── generated_code/         # Your generated scripts appear here
+│   └── orchestrator/
+│       └── memory_store/           # Error pattern memory
+├── logs/                           # Execution logs + pipeline stats
+│   └── pipeline_run_stats.jsonl   # Token usage & cost tracking
+├── demos/                          # Example scripts
+└── docker/                         # Sandbox container
+```
+
+---
+
+## Next Steps
+
+### 1. Try Generation Examples
 
 ```bash
-# Override model selection
+# Simple
+python ESIB_AiCodingAgent.py --generate "Create a CSV parser"
+
+# Medium
+python ESIB_AiCodingAgent.py --generate "Build a to-do list manager with SQLite"
+
+# Complex
+python ESIB_AiCodingAgent.py --generate "Create a REST API with authentication, rate limiting, and database integration"
+```
+
+### 2. Try Debug Mode
+
+```bash
+# Create a buggy script
+cat > buggy.py << EOF
+def divide(a, b):
+    return a / b
+
+print(divide(10, 0))
+EOF
+
+# Fix it automatically
+python ESIB_AiCodingAgent.py --fix buggy.py
+```
+
+### 3. Check Pipeline Statistics
+
+```bash
+# View token usage and cost estimates
+cat logs/pipeline_run_stats.jsonl
+
+# Each entry shows:
+# - run_id, timestamp
+# - status (success/error)
+# - stage reached
+# - usage (input/output tokens)
+# - cost (equivalent cloud pricing)
+# - summary (file path, functions, classes)
+```
+
+### 4. Customize Configuration
+
+```bash
+# Set environment variables
 export OLLAMA_MODEL=qwen3:8b
+export LLM_TIMEOUT=300
+export AGENT_WORKSPACE=/your/workspace
 
-# Override Ollama URL (if running remotely)
-export OLLAMA_BASE_URL=http://192.168.1.100:11434
-
-# Debugging configuration
-export MAX_DEBUG_ITERATIONS=15
-export DEBUG_TIMEOUT=60
+# Then run normally
+python ESIB_AiCodingAgent.py --generate "..."
 ```
 
-### Custom Output Paths
+### 5. Read Documentation
+
+```
+docs/
+├── TROUBLESHOOTING.md             # Solve common issues
+├── IMPLEMENTATION_SUMMARY.md      # Technical details
+├── WINDOWS_GUIDE.md               # Windows-specific notes
+└── CROSS_PLATFORM_GUIDE.md        # Platform compatibility
+```
+
+---
+
+## Performance Tips
+
+### For Faster Generation
 
 ```bash
-# Save generated code to specific location
-python ESIB_AiCodingAgent.py --generate "..." --output ~/my_scripts/parser.py
+# Use smaller, faster model
+python ESIB_AiCodingAgent.py --generate "..." --model qwen2.5-coder:7b
 
-# Generate multiple scripts
-for prompt in "script1" "script2" "script3"; do
-    python ESIB_AiCodingAgent.py --generate "$prompt" --output "${prompt}.py"
-done
+# Increase timeout for complex tasks
+export LLM_TIMEOUT=300
 ```
 
-### Running in Docker
+### For Better Quality
 
 ```bash
-# Build the full system image (optional)
-docker build -t esib-ai-agent .
+# Use larger, more capable model
+python ESIB_AiCodingAgent.py --generate "..." --model qwen3:8b
 
-# Run in container
-docker run -it --rm \
-    -v $(pwd)/generated_code:/app/generated_code \
-    -e OLLAMA_BASE_URL=http://host.docker.internal:11434 \
-    esib-ai-agent \
-    python ESIB_AiCodingAgent.py --generate "..."
+# Be more specific in prompts
+python ESIB_AiCodingAgent.py --generate "Create a Python script that uses BeautifulSoup to scrape headlines from BBC News, saves to CSV with timestamp and URL columns"
 ```
 
 ---
 
-## FAQ
+## Verification Checklist
 
-**Q: Do I need both models?**
-A: No. The system works with just one model. Both are downloaded by default for flexibility.
+After setup, verify everything works:
 
-**Q: Can I use other Ollama models?**
-A: The system is optimized for `qwen2.5-coder:7b` and `qwen3:8b`. Other models may work but are untested.
-
-**Q: Does this work offline?**
-A: Yes, after initial setup. Models run locally via Ollama.
-
-**Q: How much does it cost?**
-A: $0. Everything runs locally. No API keys or subscriptions.
-
-**Q: Is my code safe?**
-A: Yes. All execution happens in an isolated Docker sandbox with strict security policies.
-
-**Q: Can it generate code in other languages?**
-A: Currently optimized for Python only.
-
-**Q: What if generation fails?**
-A: The system automatically retries with guardrails validation. Check logs for details.
+- [ ] `python pre_check.py` shows all green checkmarks
+- [ ] `docker ps` runs without errors
+- [ ] `curl http://localhost:11434` returns "Ollama is running"
+- [ ] `ollama list` shows `qwen3:8b` and `qwen2.5-coder:7b`
+- [ ] Generation mode creates working code
+- [ ] Debug mode fixes errors
+- [ ] `logs/pipeline_run_stats.jsonl` exists and is updated after each run
 
 ---
 
-## Support & Documentation
+## Understanding Pipeline Statistics
 
-- **Troubleshooting:** See `docs/TROUBLESHOOTING.md`
-- **Architecture:** See `docs/ARCHITECTURE.md`
-- **Handoff Protocol:** See `docs/HANDOFF_PROTOCOL.md`
-- **Logs:** Check `logs/` directory
-- **Memory Store:** Check `memory_store/memory_store.json`
+Each generation creates an entry in `logs/pipeline_run_stats.jsonl`:
 
----
-
-## Quick Reference Card
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│  FIRST TIME SETUP                                            │
-│  1. Install Docker Desktop                                   │
-│  2. Install Ollama                                           │
-│  3. Run: ./setup.sh  (or setup.bat on Windows)               │
-│  4. Test: ./run.sh check                                     │
-├──────────────────────────────────────────────────────────────┤
-│  GENERATE CODE                                               │
-│  ./run.sh generate "your prompt"                             │
-│  ./run.sh generate "your prompt" qwen3:8b                    │
-│  OR: python ESIB_AiCodingAgent.py --generate "..." --model X │
-├──────────────────────────────────────────────────────────────┤
-│  DEBUG CODE                                                  │
-│  ./run.sh debug path/to/script.py                            │
-│  OR: python ESIB_AiCodingAgent.py --fix script.py --model X  │
-├──────────────────────────────────────────────────────────────┤
-│  SEE IT WORK                                                 │
-│  ./run.sh demo                                               │
-└──────────────────────────────────────────────────────────────┘
+```json
+{
+  "run_id": "gen_a1b2c3d4",
+  "timestamp": "2026-04-21T12:00:00Z",
+  "status": "success",
+  "stage": 8,
+  "duration_ms": 45230,
+  "usage": {
+    "input_tokens": 1250,
+    "output_tokens": 850,
+    "total_tokens": 2100
+  },
+  "cost": {
+    "input_usd": 0.00025,
+    "output_usd": 0.00068,
+    "total_usd": 0.00093,
+    "cumulative_usd": 0.05432
+  },
+  "summary": {
+    "file_path": "src/generation/generated_code/generated_abc123_20260421.py",
+    "functions_count": 3,
+    "classes_count": 1
+  },
+  "features": {
+    "prompt_injection_blocked": false,
+    "stage6_syntax_repairs": 0,
+    "stage6_used_fallback": false
+  }
+}
 ```
 
----
-
-## License & Credits
-
-**Project:** FYP 26/21  
-**Institution:** École Supérieure d'Ingénieurs de Beyrouth (USJ)  
-**Supervisor:** Anthony Assi  
-
-**Team:**
-- Joe Anthony Daoud — Code Generation
-- Raymond Rached — Code Debugging
-- Elise Nassar — Security & Guardrails
-- Maria Sabbagh — Orchestration & Docker Execution
+**Cost is "equivalent cloud pricing"** - estimates what this would cost using commercial LLM APIs (like GPT-4). Since you're running Ollama locally, actual cost is $0.
 
 ---
 
-*Last updated: April 2026*
+## Getting Help
+
+If you encounter issues:
+
+1. **Run health check:**
+   ```bash
+   python pre_check.py
+   ```
+
+2. **Check logs:**
+   ```
+   logs/generation_*_logs.log
+   logs/debug_*_logs.log
+   logs/pipeline_run_stats.jsonl
+   ```
+
+3. **Read troubleshooting:**
+   ```bash
+   cat docs/TROUBLESHOOTING.md
+   ```
+
+4. **Enable verbose output:**
+   ```bash
+   python ESIB_AiCodingAgent.py --generate "..." --verbose
+   ```
+
+---
+
+**You're all set! Start generating and debugging code! 🚀**

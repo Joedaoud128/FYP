@@ -23,6 +23,8 @@ import tempfile
 import time
 import uuid
 import tokenize
+import urllib.request
+import urllib.error
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -33,10 +35,12 @@ logger = logging.getLogger("debugging")
 # Configuration
 # ---------------------------------------------------------------------------
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:7b")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3:8b")
+FALLBACK_MODEL = "qwen2.5-coder:7b"
 MAX_DEBUG_ITERATIONS = int(os.environ.get("MAX_DEBUG_ITERATIONS", "10"))
 DEBUG_TIMEOUT = int(os.environ.get("DEBUG_TIMEOUT", "30"))
 LLM_FALLBACK_MAX_ATTEMPTS = int(os.environ.get("LLM_FALLBACK_MAX_ATTEMPTS", "2"))
+LLM_TIMEOUT = int(os.environ.get("LLM_TIMEOUT", "180"))  # Timeout for LLM API calls (default 180s)
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -71,33 +75,30 @@ STRESS_LOG_FILE_DEFAULT = os.environ.get("DEBUG_STRESS_LOG_FILE", "stress_debugg
 # LLM prompts
 # ---------------------------------------------------------------------------
 FIX_GENERATION_PROMPT = """\
-You are the fix-generation component of a reactive debugging agent.
-You operate inside a containerized sandbox.
+You are a Python debugging assistant. Your job is to fix the error in the provided code.
 
-Return only a JSON object with this exact schema:
+CRITICAL: You MUST return a JSON object with these fields:
 {
-  "proposed_command": "<single whitelisted command>",
-  "corrected_code": "<complete corrected python file>",
-  "reasoning": "<one sentence>"
+  "proposed_command": "python -m py_compile <filepath>",
+  "corrected_code": "COMPLETE FIXED PYTHON FILE HERE",
+  "reasoning": "brief explanation of the fix"
 }
 
-Rules:
-1. proposed_command must be exactly one command and must be from this allowlist family:
-   - python -V
-   - python <script.py>
-   - python -m py_compile <file.py>
-   - python -m pip show <pkg>
-   - python -m pip list
-   - python -m pip install <pkg>
-   - python -m ruff check <path>
-   - pwd, ls, ls -la, cat <file>, head -n N <file>, tail -n N <file>
-   - wc -l <file>, diff <file_a> <file_b>, file <path>
-   - grep -n "<pattern>" <file>, grep -R -n "<pattern>" <path>
-   - find <path> -maxdepth N -type f
-   - mkdir -p <dir>, cp <src> <dst>, mv <src> <dst>, rm <file>
-2. No command chaining and no shell metacharacters (; | && > >> || ` $( ${).
-3. corrected_code must be full valid Python source, no markdown fences.
-4. Keep fixes minimal and targeted to the current runtime error.
+IMPORTANT RULES:
+1. corrected_code MUST contain the ENTIRE fixed Python file (all imports, all functions, all code)
+2. corrected_code MUST be valid Python (no markdown, no comments explaining the fix)
+3. corrected_code MUST NOT be empty - include the complete file content
+4. proposed_command should be: python -m py_compile <filepath>
+5. Only fix the specific error mentioned - don't rewrite everything
+
+Example response format:
+{
+  "proposed_command": "python -m py_compile script.py",
+  "corrected_code": "#!/usr/bin/env python3\\nimport math\\n\\ndef calculate_average(numbers):\\n    if not numbers:\\n        return 0\\n    total = sum(numbers)\\n    count = len(numbers)\\n    average = total / count\\n    return average\\n\\ndata = []\\nprint(\\"Average:\\", calculate_average(data))",
+  "reasoning": "Added check for empty list to prevent ZeroDivisionError"
+}
+
+Remember: corrected_code must be the COMPLETE file, not just the changed function!
 """
 
 # ---------------------------------------------------------------------------
@@ -374,10 +375,18 @@ class _SubprocessDebugger:
             if not proposal:
                 feedback = "Return valid JSON with proposed_command and corrected_code."
                 last_reason = "llm-invalid-proposal"
+                logger.warning("[Probabilistic] LLM returned invalid proposal (attempt %d/%d)", 
+                             attempt, self.llm_fallback_max_attempts)
                 continue
 
             proposed_command = str(proposal.get("proposed_command", "")).strip()
             corrected_code = str(proposal.get("corrected_code", "")).strip()
+            
+            # Log what we got from LLM
+            logger.info("[Probabilistic] LLM proposal - command: %s, code length: %d chars", 
+                       proposed_command[:50] if proposed_command else "(empty)", 
+                       len(corrected_code))
+            
             proposed_command = self._normalize_probabilistic_command(proposed_command, script_path)
 
             if not proposed_command and corrected_code:
@@ -427,15 +436,21 @@ class _SubprocessDebugger:
             if not cleaned_code:
                 feedback = "corrected_code is empty; return full Python file content."
                 last_reason = "llm-empty-code"
+                logger.warning("[Probabilistic] Sanitized code is empty")
                 continue
 
             if not self._is_valid_python(cleaned_code):
+                logger.warning("[Probabilistic] Code failed ast.parse validation, attempting repair...")
+                logger.debug("[Probabilistic] Invalid code preview:\n%s", cleaned_code[:500])
+                
                 repaired_code = self._repair_source_text(cleaned_code)
                 if repaired_code and self._is_valid_python(repaired_code):
+                    logger.info("[Probabilistic] Successfully repaired code")
                     cleaned_code = repaired_code
                 else:
                     feedback = "corrected_code is invalid Python; return syntactically valid code."
                     last_reason = "llm-invalid-python"
+                    logger.warning("[Probabilistic] Repair failed, code still invalid")
                     continue
 
             if self._apply_fix(script_path, cleaned_code):
@@ -518,9 +533,15 @@ class _SubprocessDebugger:
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
-            with urllib.request.urlopen(req, timeout=60) as response:
+            # Use configurable timeout for LLM calls (default 180s for slower machines)
+            with urllib.request.urlopen(req, timeout=LLM_TIMEOUT) as response:
                 data = json.loads(response.read())
             content = str(data.get("message", {}).get("content", "")).strip()
+            
+            # Log raw LLM response for debugging
+            logger.info("[LLM Debug] Raw response length: %d chars", len(content))
+            logger.debug("[LLM Debug] First 1000 chars of response:\n%s", content[:1000])
+            
             return self._parse_llm_json(content, script_path=script_path)
         except Exception as exc:
             logger.warning("LLM fallback failed: %s", exc)
@@ -528,6 +549,7 @@ class _SubprocessDebugger:
 
     def _parse_llm_json(self, content: str, script_path: str = "") -> Optional[Dict[str, Any]]:
         if not content:
+            logger.warning("[LLM Parse] Empty content received")
             return None
 
         candidates = [content]
@@ -536,7 +558,7 @@ class _SubprocessDebugger:
         if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
             candidates.append(content[first_brace : last_brace + 1])
 
-        for candidate in candidates:
+        for i, candidate in enumerate(candidates):
             try:
                 parsed = json.loads(candidate)
                 if isinstance(parsed, dict):
@@ -552,22 +574,38 @@ class _SubprocessDebugger:
                         or parsed.get("code")
                         or ""
                     )
+                    
+                    logger.info("[LLM Parse] Successfully parsed JSON (candidate %d)", i)
+                    logger.info("[LLM Parse] Found command: %s", command[:50] if command else "(empty)")
+                    logger.info("[LLM Parse] Found code: %d chars", len(corrected))
+                    
+                    if not corrected:
+                        logger.warning("[LLM Parse] JSON valid but corrected_code is empty!")
+                        logger.debug("[LLM Parse] Parsed JSON keys: %s", list(parsed.keys()))
+                    
                     return {
                         "proposed_command": str(command).strip(),
                         "corrected_code": str(corrected),
                         "reasoning": str(parsed.get("reasoning", "")).strip(),
                     }
-            except Exception:
+            except json.JSONDecodeError as e:
+                logger.debug("[LLM Parse] Candidate %d failed JSON parse: %s", i, str(e)[:100])
+                continue
+            except Exception as e:
+                logger.debug("[LLM Parse] Candidate %d failed: %s", i, str(e)[:100])
                 continue
 
+        logger.warning("[LLM Parse] All JSON candidates failed, trying code extraction")
         extracted_code = self._extract_code_from_response(content)
         if extracted_code:
+            logger.info("[LLM Parse] Extracted %d chars of code from non-JSON response", len(extracted_code))
             return {
                 "proposed_command": self._default_syntax_check_command(script_path) if script_path else "python -m py_compile",
                 "corrected_code": extracted_code,
                 "reasoning": "extracted code from non-JSON LLM response",
             }
 
+        logger.warning("[LLM Parse] Failed to extract anything useful from LLM response")
         return None
 
     def _extract_code_from_response(self, content: str) -> str:
@@ -1152,6 +1190,54 @@ class CodeDebugger:
         self.executor = executor
         self.max_iterations = max_iterations or MAX_DEBUG_ITERATIONS
         self.timeout = timeout or DEBUG_TIMEOUT
+        
+        # Auto-preload model to avoid first-call timeout
+        self._ensure_model_loaded()
+
+    def _ensure_model_loaded(self):
+        """
+        Check if the model is loaded in Ollama. If not, trigger a preload.
+        This prevents the first LLM call from timing out due to model loading time.
+        """
+        try:
+            # Check currently loaded models via /api/ps
+            req = urllib.request.Request(f"{self.ollama_url}/api/ps")
+            with urllib.request.urlopen(req, timeout=5) as response:
+                data = json.loads(response.read())
+                loaded_models = [m.get("name", "") for m in data.get("models", [])]
+                
+                # Check if our model is already loaded
+                if any(self.ollama_model in name for name in loaded_models):
+                    logger.info("[Debugging] Model '%s' already loaded", self.ollama_model)
+                    return
+            
+            # Model not loaded - trigger a minimal generation to load it
+            logger.info("[Debugging] Preloading model '%s' (first-time setup)...", self.ollama_model)
+            
+            payload = json.dumps({
+                "model": self.ollama_model,
+                "messages": [{"role": "user", "content": "Hello"}],
+                "stream": False,
+                "options": {"num_predict": 1},  # Minimal tokens
+            }).encode("utf-8")
+            
+            req = urllib.request.Request(
+                f"{self.ollama_url}/api/chat",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            
+            with urllib.request.urlopen(req, timeout=120) as response:
+                # Don't care about the response, just needed to load model
+                _ = response.read()
+            
+            logger.info("[Debugging] Model '%s' preloaded successfully", self.ollama_model)
+            
+        except Exception as exc:
+            # Don't fail initialization if preload fails - just log warning
+            logger.warning("[Debugging] Could not preload model: %s", exc)
+            logger.warning("[Debugging] First LLM call may be slow due to model loading")
 
     def debug(self, schema_b: dict) -> dict:
         normalized = self._normalize_schema_b(schema_b)

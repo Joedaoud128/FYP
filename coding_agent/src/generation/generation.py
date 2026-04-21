@@ -1,6 +1,6 @@
 """
 Phase 3 - Proactive Code Generator
-Powered by qwen2.5-coder:7b running locally via Ollama.
+Powered by qwen3:8b running locally via Ollama.
 
 6-Stage Pipeline:
     Stage 1:  Accept user natural language prompt
@@ -17,7 +17,7 @@ Guardrails Integration (Module 7 - Policy Check):
 
 Requirements (install once):
     1. Install Ollama:        curl -fsSL https://ollama.com/install.sh | sh
-    2. Pull the model:        ollama pull qwen2.5-coder:7b  (or qwen2.5:3b for lower bandwidth)
+    2. Pull the model:        ollama pull qwen3:8b
     3. Install guardrails:    pip install pyyaml
     4. Place guardrails_engine.py and guardrails_config.yaml in the same directory.
 
@@ -113,37 +113,62 @@ def _validate_and_run(engine, raw_command: str, working_dir: str) -> tuple[bool,
 
 
 # ---------------------------------------------------------------------------
-# LLM Client - wraps qwen2.5-coder:7b via Ollama local REST API
+# LLM Client - wraps qwen3:8b via Ollama local REST API
 # ---------------------------------------------------------------------------
+
+def _get_curl_command():
+    """
+    Get the appropriate curl command for the current platform.
+    
+    On Windows, PowerShell aliases 'curl' to Invoke-WebRequest which doesn't
+    output text to stdout. We must use 'curl.exe' to get the real curl.
+    On Linux/Mac, 'curl' works fine and 'curl.exe' doesn't exist.
+    
+    Returns:
+        str: 'curl.exe' on Windows, 'curl' on Linux/Mac
+    """
+    return "curl.exe" if platform.system() == "Windows" else "curl"
+
 
 class QwenCoderClient:
     """
     Calls Ollama's local REST API (http://localhost:11434).
     Ollama runs as a background service and manages GPU acceleration automatically.
-    Model: qwen2.5-coder:7b  (pull with: ollama pull qwen2.5-coder:7b)
+    Default Model: qwen3:8b
     """
 
     OLLAMA_BASE = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
     OLLAMA_CHAT = f"{OLLAMA_BASE}/api/chat"
-    MODEL_NAME = os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:7b")
+    MODEL_NAME = os.environ.get("OLLAMA_MODEL", "qwen3:8b")  # Default to qwen3:8b
 
-    def __init__(self, max_new_tokens: int = 2048, temperature: float = 0.2):
+    def __init__(self, max_new_tokens: int = 4096, temperature: float = 0.2):
         self.max_new_tokens = max_new_tokens
         self.temperature = temperature
         self._check_ollama()
+        self._ensure_model_loaded()
 
     def _check_ollama(self):
         """Verify Ollama is running and the required model is pulled."""
         try:
             # Use curl instead of urllib for reliable Ollama API communication
+            curl_cmd = _get_curl_command()
             result = subprocess.run(
-                ["curl", "-s", f"{self.OLLAMA_BASE}/api/tags"],
+                [curl_cmd, "-s", f"{self.OLLAMA_BASE}/api/tags"],
                 capture_output=True, text=True, timeout=10
             )
             raw_output = (result.stdout or "").strip()
+            raw_error = (result.stderr or "").strip()
+            
             if not raw_output:
-                print("[LLM] WARNING: Ollama returned empty response — may not be ready")
-                return
+                if raw_error:
+                    print(f"[LLM] ERROR: curl failed: {raw_error}")
+                    raise RuntimeError(
+                        f"Cannot reach Ollama at {self.OLLAMA_BASE}. "
+                        f"curl error: {raw_error}"
+                    )
+                else:
+                    print("[LLM] WARNING: Ollama returned empty response — may not be ready")
+                    return
             try:
                 data = json.loads(raw_output)
             except json.JSONDecodeError:
@@ -164,12 +189,63 @@ class QwenCoderClient:
                 "Start it with: ollama serve"
             )
 
+    def _ensure_model_loaded(self):
+        """
+        Check if the model is loaded in Ollama. If not, trigger a preload.
+        This prevents the first LLM call from timing out due to model loading time.
+        """
+        try:
+            # Check currently loaded models via /api/ps
+            curl_cmd = _get_curl_command()
+            result = subprocess.run(
+                [curl_cmd, "-s", f"{self.OLLAMA_BASE}/api/ps"],
+                capture_output=True, text=True, timeout=5
+            )
+            
+            if result.stdout:
+                data = json.loads(result.stdout)
+                loaded_models = [m.get("name", "") for m in data.get("models", [])]
+                
+                # Check if our model is already loaded
+                if any(self.MODEL_NAME in name for name in loaded_models):
+                    print(f"[LLM] Model '{self.MODEL_NAME}' already loaded")
+                    return
+            
+            # Model not loaded - trigger a minimal generation to load it
+            print(f"[LLM] Preloading model '{self.MODEL_NAME}' (first-time setup, may take 30-60 seconds)...")
+            
+            payload = json.dumps({
+                "model": self.MODEL_NAME,
+                "messages": [{"role": "user", "content": "Hello"}],
+                "stream": False,
+                "options": {"num_predict": 1, "num_ctx": 2048},  # Minimal tokens
+            })
+            
+            result = subprocess.run(
+                [curl_cmd, "-s", "-X", "POST", f"{self.OLLAMA_BASE}/api/chat",
+                 "-H", "Content-Type: application/json",
+                 "-d", payload,
+                 "--max-time", "180"],
+                capture_output=True, text=True, timeout=190
+            )
+            
+            if result.stdout:
+                print(f"[LLM] Model '{self.MODEL_NAME}' preloaded successfully")
+            else:
+                print(f"[LLM] WARNING: Model preload may have failed")
+            
+        except Exception as exc:
+            # Don't fail initialization if preload fails - just log warning
+            print(f"[LLM] WARNING: Could not preload model: {exc}")
+            print(f"[LLM] First LLM call may be slow due to model loading")
+
     def chat(
         self,
         system_prompt: str,
         user_message: str,
         max_new_tokens: int | None = None,
         temperature: float | None = None,
+        timeout_seconds: int | None = None,
     ) -> str:
         """Compatibility wrapper that returns only text content."""
         content, _ = self.chat_with_usage(
@@ -177,6 +253,7 @@ class QwenCoderClient:
             user_message,
             max_new_tokens=max_new_tokens,
             temperature=temperature,
+            timeout_seconds=timeout_seconds,
         )
         return content
 
@@ -186,10 +263,20 @@ class QwenCoderClient:
         user_message: str,
         max_new_tokens: int | None = None,
         temperature: float | None = None,
+        timeout_seconds: int | None = None,
     ) -> tuple[str, dict]:
-        """Send a chat request and return model reply plus token usage metadata."""
+        """Send a chat request and return model reply plus token usage metadata.
+        
+        Supports qwen3:8b (uses 'thinking' field) and other models.
+        """
+        # Get timeout from parameter, env var, or default (600 seconds = 10 minutes for qwen3)
+        if timeout_seconds is None:
+            timeout_seconds = int(os.environ.get("LLM_TIMEOUT", "600"))
+        
         token_budget = max_new_tokens if max_new_tokens is not None else self.max_new_tokens
         sampling_temp = temperature if temperature is not None else self.temperature
+        
+        # Increase context size for qwen3
         payload = json.dumps({
             "model": self.MODEL_NAME,
             "messages": [
@@ -200,21 +287,50 @@ class QwenCoderClient:
             "options": {
                 "temperature": sampling_temp,
                 "num_predict": token_budget,
+                "num_ctx": 8192,  # Larger context window for qwen3
             },
         })
 
-        result = subprocess.run(
-            ["curl", "-s", "-X", "POST", self.OLLAMA_CHAT,
-             "-H", "Content-Type: application/json",
-             "-d", payload,
-             "--max-time", "60"],
-            capture_output=True, text=True, timeout=65
-        )
+        curl_cmd = _get_curl_command()
+        
+        # Use longer timeout for curl command with better error handling
+        try:
+            result = subprocess.run(
+                [curl_cmd, "-s", "-X", "POST", self.OLLAMA_CHAT,
+                 "-H", "Content-Type: application/json",
+                 "-d", payload,
+                 "--max-time", str(timeout_seconds)],
+                capture_output=True, text=True, timeout=timeout_seconds + 15
+            )
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(
+                f"LLM request timed out after {timeout_seconds} seconds. "
+                f"Qwen3:8b requires more time on slower hardware. "
+                f"Try:\n"
+                f"1. Increase timeout: set LLM_TIMEOUT=900\n"
+                f"2. Reduce max tokens: --max-tokens 2048\n"
+                f"3. Or use qwen2.5-coder:7b: --model qwen2.5-coder:7b"
+            )
+        
         raw_output = (result.stdout or "").strip()
+        raw_error = (result.stderr or "").strip()
+        
+        # Check if curl itself failed
+        if not raw_output and raw_error:
+            raise RuntimeError(
+                f"curl command failed: {raw_error}\n"
+                f"Command: curl -X POST {self.OLLAMA_CHAT}\n"
+                f"This usually means:\n"
+                f"  1. Ollama is not running on {self.OLLAMA_BASE}\n"
+                f"  2. curl is not installed or not in PATH\n"
+                f"  3. Network/firewall blocking localhost connection"
+            )
+        
         if not raw_output:
             raise RuntimeError(
-                "Ollama API returned empty response. "
-                "Verify Ollama is running and reachable at " + self.OLLAMA_BASE
+                "Ollama API returned empty response (no stdout or stderr). "
+                "Verify Ollama is running and reachable at " + self.OLLAMA_BASE +
+                "\nTry manually: curl " + self.OLLAMA_BASE + "/api/tags"
             )
         try:
             data = json.loads(raw_output)
@@ -226,7 +342,39 @@ class QwenCoderClient:
         if "error" in data:
             raise RuntimeError(f"Ollama error: {data['error']}")
 
-        content = data.get("message", {}).get("content", "").strip()
+        # Extract message content - supports both qwen3 and other models
+        message = data.get("message", {})
+        
+        # Try content field first (standard behavior)
+        content = message.get("content", "").strip()
+        
+        # If content is empty, try thinking field (qwen3 behavior)
+        if not content:
+            thinking = message.get("thinking", "").strip()
+            if thinking:
+                content = thinking
+                print(f"[LLM] Note: Extracted response from 'thinking' field (Qwen3 model)")
+        
+        # If still empty, check if we hit token limits
+        if not content:
+            eval_count = data.get("eval_count", 0)
+            prompt_eval_count = data.get("prompt_eval_count", 0)
+            
+            # Check if model ran out of tokens
+            if token_budget and eval_count >= token_budget:
+                raise RuntimeError(
+                    f"Model used all {token_budget} tokens without producing output. "
+                    f"Increase max_new_tokens (currently {token_budget}) or reduce context size."
+                )
+            
+            raise RuntimeError(
+                f"Ollama returned empty response. "
+                f"Message fields: {list(message.keys())}. "
+                f"Eval count: {eval_count}, Prompt eval count: {prompt_eval_count}. "
+                f"This may indicate the model is not generating properly."
+            )
+        
+        # Extract token usage
         prompt_tokens = int(data.get("prompt_eval_count", 0) or 0)
         completion_tokens = int(data.get("eval_count", 0) or 0)
         usage = {
@@ -257,11 +405,11 @@ class ProactiveCodeGenerator:
     STAGE3_MAX_TOKENS = 400
     STAGE4_MIN_TOKENS = 300
     STAGE4_MAX_TOKENS = 600
-    STAGE6_MIN_TOKENS = 800
-    STAGE6_MAX_TOKENS = 1600
-    COMPLEX_TASK_TOKEN_FLOOR = 1800
-    STAGE6_MEDIUM_COMPLEX_FIRST_MIN = 1800
-    STAGE6_MEDIUM_COMPLEX_FIRST_MAX = 2400
+    STAGE6_MIN_TOKENS = 1200  # Increased for qwen3
+    STAGE6_MAX_TOKENS = 3000  # Increased for qwen3
+    COMPLEX_TASK_TOKEN_FLOOR = 2500
+    STAGE6_MEDIUM_COMPLEX_FIRST_MIN = 2500
+    STAGE6_MEDIUM_COMPLEX_FIRST_MAX = 4000
     PROMPT_MAX_CHARS = 4000
     PROMPT_INJECTION_BLOCK_THRESHOLD = 1
     STRICT_PROMPT_INJECTION_BLOCK = True
@@ -302,8 +450,8 @@ class ProactiveCodeGenerator:
     def _stage6_token_budget(self, requirements: dict) -> int:
         """
         Return Stage 6 token budget.
-        - Normal path: 800-1600
-        - Genuinely complex tasks: keep higher cap (up to client default)
+        - Normal path: 1200-3000 (increased for qwen3)
+        - Genuinely complex tasks: keep higher cap
         """
         complexity = int(requirements.get("complexity_level", 5) or 5)
         estimated_steps = int(requirements.get("estimated_steps", 3) or 3)
@@ -311,19 +459,19 @@ class ProactiveCodeGenerator:
         if complexity >= 9:
             return max(self.COMPLEX_TASK_TOKEN_FLOOR, self.llm.max_new_tokens)
 
-        budget = 800 + (complexity * 70) + (estimated_steps * 25)
+        budget = 1200 + (complexity * 100) + (estimated_steps * 40)
         return self._clamp(budget, self.STAGE6_MIN_TOKENS, self.STAGE6_MAX_TOKENS)
 
     def _stage6_first_attempt_budget(self, requirements: dict) -> int:
         """
-        Boost first-attempt budget for medium/complex tasks to improve quality.
-        Complexity 6-8 gets 1800-2400 tokens for first pass.
+        Boost first-attempt budget for medium/complex tasks.
+        Complexity 6-8 gets 2500-4000 tokens for first pass.
         """
         complexity = int(requirements.get("complexity_level", 5) or 5)
         estimated_steps = int(requirements.get("estimated_steps", 3) or 3)
 
         if complexity >= 6:
-            boosted = 1800 + ((complexity - 6) * 220) + (estimated_steps * 20)
+            boosted = 2500 + ((complexity - 6) * 300) + (estimated_steps * 30)
             return self._clamp(
                 boosted,
                 self.STAGE6_MEDIUM_COMPLEX_FIRST_MIN,
@@ -408,7 +556,9 @@ class ProactiveCodeGenerator:
     def _write_run_stats(self, stats: dict) -> None:
         """Append run stats as pretty JSON blocks so each execution is easy to read."""
         try:
-            log_dir = Path(__file__).parent / self.LOG_DIR
+            # Use project root logs directory, not module directory
+            project_root = Path(__file__).parent.parent.parent
+            log_dir = project_root / self.LOG_DIR
             log_dir.mkdir(exist_ok=True)
             log_path = log_dir / self.RUN_STATS_FILE
             with log_path.open("a", encoding="utf-8") as handle:
@@ -419,7 +569,9 @@ class ProactiveCodeGenerator:
 
     def _historical_total_spend_usd(self) -> float:
         """Read previous logs and return cumulative spend seen so far."""
-        log_path = Path(__file__).parent / self.LOG_DIR / self.RUN_STATS_FILE
+        # Use project root logs directory, not module directory
+        project_root = Path(__file__).parent.parent.parent
+        log_path = project_root / self.LOG_DIR / self.RUN_STATS_FILE
         if not log_path.exists():
             return 0.0
 
@@ -589,7 +741,7 @@ class ProactiveCodeGenerator:
         repaired, usage = self.llm.chat_with_usage(
             system,
             prompt,
-            max_new_tokens=900,
+            max_new_tokens=1200,
             temperature=0.03,
         )
         return self._strip_code_fences(repaired), usage
@@ -699,7 +851,6 @@ class ProactiveCodeGenerator:
     # ===================================================================
     # PUBLIC ENTRY POINT
     # ===================================================================
-
 
     def generate_from_prompt(self, user_prompt: str) -> dict:
         """
@@ -1120,6 +1271,7 @@ class ProactiveCodeGenerator:
             prompt,
             max_new_tokens=self._stage4_token_budget(requirements),
             temperature=self._stage4_temperature(requirements),
+            timeout_seconds=300,  # 5 minutes for planning
         )
         try:
             cleaned = self._strip_code_fences(raw)
@@ -1343,12 +1495,12 @@ class ProactiveCodeGenerator:
               an EOFError and immediate failure. Hard-code representative values,
               use argparse with sensible defaults, or generate data programmatically.
             - NEVER use interactive prompts of any kind (input, getpass, fileinput, etc.).
-                        - Ensure the code is syntactically valid Python on the first attempt.
-                        - Output contract is strict:
-                            1) imports first
-                            2) helper functions/classes
-                            3) main() function
-                            4) if __name__ == '__main__' guard
+            - Ensure the code is syntactically valid Python on the first attempt.
+            - Output contract is strict:
+                1) imports first
+                2) helper functions/classes
+                3) main() function
+                4) if __name__ == '__main__' guard
             - Return ONLY the Python code. No markdown fences. No explanatory text.
               Any text outside valid Python will break the parser.
         """)
@@ -1397,7 +1549,7 @@ class ProactiveCodeGenerator:
         for attempt in range(1, self.MAX_STAGE6_REGEN_ATTEMPTS + 1):
             stage6_stats["attempts"] = attempt
             current_token_budget = (
-                stage6_first_attempt_tokens if attempt == 1 else min(1200, stage6_tokens)
+                stage6_first_attempt_tokens if attempt == 1 else min(2000, stage6_tokens)
             )
             response, usage = self.llm.chat_with_usage(
                 system,
@@ -1754,7 +1906,7 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Phase 3 - Proactive Code Generator (qwen2.5-coder:7b via Ollama)"
+        description="Phase 3 - Proactive Code Generator (qwen3:8b via Ollama)"
     )
     parser.add_argument(
         "prompt",
@@ -1763,8 +1915,8 @@ if __name__ == "__main__":
         help="Natural-language description of the code to generate",
     )
     parser.add_argument(
-        "--max-tokens", type=int, default=2048,
-        help="Maximum new tokens for LLM generation (default: 2048)",
+        "--max-tokens", type=int, default=4096,  # Increased for qwen3
+        help="Maximum new tokens for LLM generation (default: 4096)",
     )
     parser.add_argument(
         "--temperature", type=float, default=0.2,
@@ -1777,7 +1929,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     print(f"Phase 3 - Proactive Code Generator")
-    print(f"Model: qwen2.5-coder:7b via Ollama")
+    print(f"Model: qwen3:8b via Ollama")
     print(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
     llm = QwenCoderClient(max_new_tokens=args.max_tokens, temperature=args.temperature)

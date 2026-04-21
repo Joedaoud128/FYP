@@ -445,16 +445,15 @@ Examples:
         help="(Generate Mode only) Copy the generated script to this path.",
     )
     parser.add_argument(
+        "--model", "-m",
+        choices=["qwen2.5-coder:7b", "qwen3:8b"],
+        default=None,
+        help="LLM model to use for code generation and debugging. Default: qwen2.5-coder:7b",
+    )
+    parser.add_argument(
         "--verbose", "-v",
         action="store_true",
         help="Enable DEBUG-level logging from all pipeline modules.",
-    )
-
-    parser.add_argument(
-    "--model", "-m",
-    choices=["qwen2.5-coder:7b", "qwen3:8b"],
-    default="qwen2.5-coder:7b",
-    help="LLM model to use for code generation and debugging. Default: qwen2.5-coder:7b",
     )
 
     return parser
@@ -495,17 +494,26 @@ def main() -> int:
         logger.info("Python     : %s", sys.version.split()[0])
         logger.info("Working dir: %s", os.getcwd())
         logger.info("Script dir : %s", _HERE)
+        
+        # Set AGENT_WORKSPACE for guardrails (required on Windows)
+        if not os.environ.get("AGENT_WORKSPACE"):
+            # Use project root (parent of script directory)
+            project_root = os.getcwd()
+            os.environ["AGENT_WORKSPACE"] = project_root
+            logger.info("AGENT_WORKSPACE set to: %s", project_root)
+        
+        # Set model selection if provided via CLI
+        if hasattr(args, 'model') and args.model:
+            os.environ["OLLAMA_MODEL"] = args.model
+            logger.info("Model      : %s", args.model)
+        else:
+            logger.info("Model      : %s (default)", os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:7b"))
+        
         if os.environ.get("RUNNING_IN_DOCKER"):
             logger.info("Environment: Docker container")
         else:
             logger.info("Environment: host")
 
-        # Set model environment variable if specified
-        if hasattr(args, 'model') and args.model:
-            os.environ["OLLAMA_MODEL"] = args.model
-            logger.info("Model      : %s", args.model)
-
-        
         # ── Dispatch ──────────────────────────────────────────────────────────
         if args.generate:
             results["generate"] = run_generate(
