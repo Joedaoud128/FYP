@@ -190,23 +190,35 @@ if !HAS_ERROR! equ 0 (
 echo.
 echo [8/8] Setting up Docker sandbox image...
 if !HAS_ERROR! equ 0 (
+    REM Check if image already exists locally
     docker images agent-sandbox -q | findstr . >nul 2>&1
     if not errorlevel 1 (
         echo [OK] Docker image already exists
     ) else (
-        echo     Building Docker image ^(this may take a minute^)...
-        docker build -t agent-sandbox -f docker\Dockerfile . --quiet
+        REM Try to pull from Docker Hub first
+        echo     Attempting to pull pre-built image from Docker Hub...
+        echo     ^(Faster - ~200MB download^)
+        docker pull mariasabbagh1/esib-ai-agent:latest
         if errorlevel 1 (
-            echo [X] Docker build failed
-            echo     Trying with verbose output...
-            docker build -t agent-sandbox -f docker\Dockerfile .
+            echo [!] Failed to pull from Docker Hub
+            echo     Falling back to local build ^(1-2 minutes^)...
+            docker build -t agent-sandbox -f docker\Dockerfile . --quiet
             if errorlevel 1 (
-                set HAS_ERROR=1
+                echo [X] Docker build failed
+                echo     Trying with verbose output...
+                docker build -t agent-sandbox -f docker\Dockerfile .
+                if errorlevel 1 (
+                    set HAS_ERROR=1
+                ) else (
+                    echo [OK] Docker image built with verbose output
+                )
             ) else (
-                echo [OK] Docker image built with verbose output
+                echo [OK] Docker image built locally
             )
         ) else (
-            echo [OK] Docker image built
+            REM Tag the pulled image as agent-sandbox for local use
+            docker tag mariasabbagh1/esib-ai-agent:latest agent-sandbox
+            echo [OK] Docker image pulled from Docker Hub and tagged
         )
     )
 )
