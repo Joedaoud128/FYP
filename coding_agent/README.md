@@ -8,7 +8,7 @@
 > Autonomous LLM agent for proactive code generation and reactive debugging
 
 **Project:** FYP 26/21 - École Supérieure d'Ingénieurs de Beyrouth (USJ)  
-**Supervisor:** Mr.Anthony Assi
+**Supervisor:** Mr. Anthony Assi
 
 ---
 
@@ -34,22 +34,24 @@ ESIB AI Coding Agent is an autonomous AI system that generates Python code from 
 
 - 🔄 **Model Flexibility**
   - Support for multiple LLM models
-  - Easy model switching via CLI flag
-  - Currently supports: `qwen2.5-coder:7b`, `qwen3:8b`
+  - Easy model switching via `--model` CLI flag
+  - Supported models: `qwen2.5-coder:7b` (default), `qwen3:8b`
 
 - 🚀 **Production-Ready**
   - Pre-built Docker image on Docker Hub
   - One-command setup
-  - Comprehensive health checks
+  - Comprehensive health checks and structured logging
 
 ---
 
-## Quick Start (**Full documentation:** See [QUICKSTART.md](QUICKSTART.md))
+## Quick Start
+
+**Full documentation:** See [QUICKSTART.md](QUICKSTART.md)
 
 ### Prerequisites
 
-1. **Docker Desktop** - [Download here](https://www.docker.com/products/docker-desktop)
-2. **Ollama** - [Download here](https://ollama.ai)
+1. **Docker Desktop** — [Download here](https://www.docker.com/products/docker-desktop)
+2. **Ollama** — [Download here](https://ollama.ai)
 
 ### Installation (5 minutes)
 
@@ -59,83 +61,88 @@ git clone https://github.com/Joedaoud128/FYP.git
 cd FYP/coding_agent
 
 # Run setup
-./setup.sh              # Linux/Mac
-.\setup.bat             # Windows PowerShell
-setup.bat               # Windows CMD
+./setup.sh        # Linux/Mac
+.\setup.bat       # Windows PowerShell
+setup.bat         # Windows CMD
 ```
-
-**Windows users:** If using PowerShell (default terminal), use `.\setup.bat`. If using CMD, use `setup.bat`.
 
 The setup script will:
 - ✅ Verify Docker and Ollama are running
-- ✅ Download AI models (~10GB, first time only)
-- ✅ Pull pre-built Docker image from Docker Hub
+- ✅ Create a Python virtual environment (`.venv`)
 - ✅ Install Python dependencies
+- ✅ Pull AI models (~10 GB, first time only)
+- ✅ Build or pull the Docker sandbox image
 - ✅ Create necessary directories
+
+### Windows — activating the virtual environment
+
+On Windows, use `run.bat` to activate the virtual environment and get an interactive shell, then run Python commands directly:
+
+```cmd
+run.bat
+```
+
+After activation you will see a prompt like `(.venv) C:\...\coding_agent>`. From there:
+
+```cmd
+python ESIB_AiCodingAgent.py --generate "Create a simple calculator"
+python ESIB_AiCodingAgent.py --fix demos\03_broken_script.py
+python ESIB_AiCodingAgent.py --help
+```
+
+> `run.bat` is a **shell activator**, not a launcher — it opens a persistent CMD window with the venv active so you can type commands freely.
 
 ### Quick Demo
 
 **Linux/Mac:**
 ```bash
-./run.sh demo
+python ESIB_AiCodingAgent.py --demo
 ```
 
-**Windows (PowerShell):**
-```powershell
-.\run.bat demo
-```
-
-**Windows (CMD):**
+**Windows (after `run.bat`):**
 ```cmd
-run.bat demo
+python ESIB_AiCodingAgent.py --demo
 ```
 
 ### Basic Usage
 
 **Generate code:**
 ```bash
-# Using convenience wrapper
-./run.sh generate "Write a web scraper for Hacker News"
-
-# Using direct entry point
+python ESIB_AiCodingAgent.py --generate "Write a web scraper for Hacker News"
 python ESIB_AiCodingAgent.py --generate "Write a CSV parser"
 ```
 
 **Debug code:**
 ```bash
-# Using convenience wrapper
-./run.sh debug path/to/broken_script.py
-
-# Using direct entry point
 python ESIB_AiCodingAgent.py --fix path/to/broken_script.py
 ```
-
-**Full documentation:** See [QUICKSTART.md](QUICKSTART.md)
 
 ---
 
 ## Model Selection
 
-The system supports multiple AI models for different use cases:
+The system defaults to `qwen2.5-coder:7b`. Use `--model` to switch:
 
-| Model | Size | Best For |
-|-------|------|----------|
-| `qwen2.5-coder:7b` | 4.7GB | Code generation, debugging (default) |
-| `qwen3:8b` | 5.0GB | Complex logic, creative solutions |
+| Model | Size | Notes |
+|-------|------|-------|
+| `qwen2.5-coder:7b` | ~4.7 GB | **Default** — optimised for code tasks |
+| `qwen3:8b` | ~5.0 GB | Newer general-purpose model |
 
-**Switch models:**
 ```bash
-# Using wrapper
-./run.sh generate "Build a REST API" qwen3:8b
-
-# Using direct entry point
+# Use qwen3:8b
 python ESIB_AiCodingAgent.py --generate "Build a REST API" --model qwen3:8b
+
+# Explicitly use qwen2.5-coder (e.g. if qwen3 is not available)
+python ESIB_AiCodingAgent.py --generate "Build a REST API" --model qwen2.5-coder:7b
 ```
 
-**Set default model:**
+> **If `qwen3:8b` is not available on your machine**, always add `--model qwen2.5-coder:7b` so the agent uses the correct model. Check available models with `ollama list`.
+
+**Set a session default via environment variable:**
 ```bash
-export OLLAMA_MODEL=qwen3:8b
-python ESIB_AiCodingAgent.py --generate "your prompt"
+export OLLAMA_MODEL=qwen2.5-coder:7b      # Linux/Mac
+set OLLAMA_MODEL=qwen2.5-coder:7b         # Windows CMD
+$env:OLLAMA_MODEL="qwen2.5-coder:7b"      # Windows PowerShell
 ```
 
 ---
@@ -149,14 +156,14 @@ Our production-ready Docker image is available for faster setup:
 **Benefits:**
 - ✅ Faster setup (~30 seconds vs 2 minutes building locally)
 - ✅ Guaranteed identical environment across machines
-- ✅ Automatic fallback to local build if needed
+- ✅ Automatic fallback to local build if pull fails
 
 **Manual pull (optional):**
 ```bash
 docker pull mariasabbagh1/esib-ai-agent:latest
 ```
 
-**Note:** The setup script automatically handles this.
+> The setup script handles this automatically.
 
 ---
 
@@ -167,54 +174,36 @@ docker pull mariasabbagh1/esib-ai-agent:latest
 ```
 User Input
     ↓
-ESIB_AiCodingAgent.py (Entry Point)
+ESIB_AiCodingAgent.py  (Entry Point — CLI, TeeStream logging, session stats)
     ↓
-Orchestrator (Module 11)
-    ├── Generation Pipeline (Joe - Module 3)
-    │   ├── Stage 1: Prompt validation
+Orchestrator  (Module 11 — Maria)
+    ├── Generation Pipeline  (Module 3 — Joe)
+    │   ├── Stage 1: Prompt validation & guardrails
     │   ├── Stage 2: Environment detection
     │   ├── Stage 3: Requirement parsing
-    │   ├── Stage 4: ReAct planning (tool usage)
+    │   ├── Stage 4: ReAct planning (LLM + tools)
     │   ├── Stage 5: Library verification & venv setup
-    │   └── Stage 6: Code assembly
-    ├── Docker Executor (Maria - Module 11)
+    │   └── Stage 6: Code assembly & syntax repair
+    ├── Schema A → Schema B Handoff  (Module 11 — Maria)
+    ├── Docker Executor  (Module 11 — Maria)
     │   └── Hardened sandbox execution
-    ├── Debugging Service (Raymond - Module 4)
-    │   └── Iterative error correction
-    └── Guardrails Engine (Elise - Module 7)
-        └── Policy validation
+    ├── Debugging Service  (Module 4 — Raymond)
+    │   └── Iterative self-correction loop
+    └── Guardrails Engine  (Module 7 — Elise)
+        └── Policy validation & whitelist enforcement
 ```
 
 ### Key Components
 
-**Orchestrator (Module 11)** - Maria
-- Dual-mode pipeline coordination
-- Schema A/B handoff protocol
-- Retry logic with same-error detection
-- Docker and subprocess execution
+**Orchestrator (Module 11)** — Maria: dual-mode coordination, Schema A/B handoff protocol, retry loop with same-error detection, Docker + subprocess execution, structured logging (`agent_logger.py`), error pattern memory (`memory_store.py`).
 
-**Generation (Module 3)** - Joe
-- 6-stage deterministic pipeline
-- ReAct-style tool usage at Stage 4
-- PyPI verification and venv creation
-- Guardrails integration
+**Generation (Module 3)** — Joe: 6-stage deterministic pipeline, ReAct-style tool usage at Stage 4, PyPI verification, guardrails integration.
 
-**Debugging (Module 4)** - Raymond
-- Deterministic + probabilistic fix strategies
-- Path A: Full debugger service
-- Path B: Fallback LLM-based debugging
-- Hybrid validation approach
+**Debugging (Module 4)** — Raymond: deterministic + probabilistic fix strategies; full debugger service with LLM-based fallback.
 
-**Guardrails (Module 7)** - Elise
-- Command validation engine
-- Policy-based security checks
-- Whitelist enforcement
+**Guardrails (Module 7)** — Elise: command validation, policy-based security checks, whitelist enforcement.
 
-**Docker Execution** - Maria
-- Custom hardened sandbox
-- Network isolation (`--network none`)
-- Resource limits (512MB RAM, 1 CPU)
-- Read-only filesystem with tmpfs
+**Docker Execution** — Maria: hardened sandbox with `--network none`, 512 MB RAM / 1 CPU limits, read-only filesystem + tmpfs, two-step volume-based package installs.
 
 ---
 
@@ -222,127 +211,88 @@ Orchestrator (Module 11)
 
 ```
 coding_agent/
-├── src/
-│   ├── orchestrator/          # Orchestration & coordination
-│   │   ├── orchestrator.py
-│   │   ├── orchestrator_handoff.py
-│   │   ├── agent_logger.py
-│   │   └── memory_store.py
-│   ├── generation/            # Code generation pipeline
-│   │   └── generation.py
-│   ├── debugging/             # Debugging service
-│   │   ├── debugging.py
-│   │   └── phase4/            # Raymond's debugger
-│   └── guardrails/            # Security & validation
-│       ├── guardrails_engine.py
-│       └── guardrails_config.yaml
+├── ESIB_AiCodingAgent.py      # Main CLI entry point
+├── orchestrator.py            # Orchestration core
+├── orchestrator_handoff.py    # Schema A/B handoff & validation
+├── agent_logger.py            # Structured JSON logger (Module 12)
+├── memory_store.py            # Error pattern memory (Module 10)
+├── generation.py              # Code generation pipeline (Module 3)
+├── debugging.py               # Debugging service (Module 4)
+├── guardrails_engine.py       # Security engine (Module 7)
+├── guardrails_config.yaml     # Security policy config
+├── pre_check.py               # System health check
+├── requirements.txt           # Python dependencies
+├── setup.sh / setup.bat       # One-command setup scripts
+├── run.sh                     # Linux/Mac convenience launcher
+├── run.bat                    # Windows venv activator
 ├── docker/
 │   └── Dockerfile             # Hardened sandbox image
 ├── demos/                     # Example scenarios
 │   ├── 01_calculator.txt
 │   ├── 02_web_scraper.txt
 │   └── 03_broken_script.py
-├── docs/                      # Documentation
-│   ├── DOCKER_HUB_GUIDE.md
-│   └── IMPLEMENTATION_SUMMARY.md
-├── ESIB_AiCodingAgent.py      # Main entry point
-├── setup.sh / setup.bat       # Setup scripts
-├── run.sh                     # Convenience wrapper
-├── pre_check.py               # Health check
-├── requirements.txt           # Python dependencies
-├── QUICKSTART.md              # User guide
-└── README.md                  # This file
+└── logs/                      # Session logs & pipeline stats
+    └── pipeline_run_stats.jsonl
 ```
 
 ---
 
 ## Usage Examples
 
-### Example 1: Web Scraper
+### Generate code
 
 ```bash
-./run.sh generate "Create a web scraper that extracts the top 10 Hacker News stories with titles, URLs, and scores. Save to JSON."
+python ESIB_AiCodingAgent.py --generate "Create a web scraper that extracts the top 10 Hacker News stories with titles, URLs, and scores. Save to JSON."
+python ESIB_AiCodingAgent.py --generate "Read a CSV file with sales data and create a bar chart of revenue by product. Use pandas and matplotlib."
 ```
 
-**Output:** `generated_code/script.py` with fully functional scraper
-
-### Example 2: Data Analysis
+### Debug a broken script
 
 ```bash
-./run.sh generate "Read a CSV file with sales data (date, product, quantity, price) and create a bar chart of revenue by product. Use pandas and matplotlib."
+python ESIB_AiCodingAgent.py --fix demos/03_broken_script.py
 ```
 
-**Output:** Complete data analysis script with visualization
-
-### Example 3: Debugging
+### Use a specific model
 
 ```bash
-./run.sh debug demos/03_broken_script.py
-```
+# Explicitly select qwen2.5-coder (e.g. if qwen3 is unavailable)
+python ESIB_AiCodingAgent.py --generate "Build a REST API client" --model qwen2.5-coder:7b
 
-**Output:** Fixed script with all errors resolved
-
-### Example 4: Model Comparison
-
-```bash
-# Generate with default model
-./run.sh generate "Build a REST API client for JSONPlaceholder" qwen2.5-coder:7b
-
-# Generate with alternative model
-./run.sh generate "Build a REST API client for JSONPlaceholder" qwen3:8b
-
-# Compare outputs
-diff generated_code/version1.py generated_code/version2.py
+# Use qwen3 for complex tasks
+python ESIB_AiCodingAgent.py --generate "Build a REST API client" --model qwen3:8b
 ```
 
 ---
 
 ## Command Reference
 
-### Setup & Health Check
-
 ```bash
-./run.sh setup          # Run setup (first time)
-./run.sh check          # Verify system health
-```
+# Health check
+python pre_check.py
 
-### Code Generation
+# Generate — default model
+python ESIB_AiCodingAgent.py --generate "your prompt"
 
-```bash
-# Default model
-./run.sh generate 'prompt'
-python ESIB_AiCodingAgent.py --generate 'prompt'
+# Generate — specific model
+python ESIB_AiCodingAgent.py --generate "your prompt" --model qwen2.5-coder:7b
+python ESIB_AiCodingAgent.py --generate "your prompt" --model qwen3:8b
 
-# Specific model
-./run.sh generate 'prompt' qwen3:8b
-python ESIB_AiCodingAgent.py --generate 'prompt' --model qwen3:8b
+# Generate — save to custom path
+python ESIB_AiCodingAgent.py --generate "your prompt" --output my_script.py
 
-# Save to custom location
-python ESIB_AiCodingAgent.py --generate 'prompt' --output my_script.py
-```
-
-### Debugging
-
-```bash
-# Default model
-./run.sh debug script.py
+# Debug
 python ESIB_AiCodingAgent.py --fix script.py
+python ESIB_AiCodingAgent.py --fix script.py --model qwen2.5-coder:7b
 
-# Specific model
-./run.sh debug script.py qwen3:8b
-python ESIB_AiCodingAgent.py --fix script.py --model qwen3:8b
-```
+# Demo
+python ESIB_AiCodingAgent.py --demo
+python ESIB_AiCodingAgent.py --demo --demo-mode generate
+python ESIB_AiCodingAgent.py --demo --demo-mode debug
 
-### Demos
+# Verbose logging
+python ESIB_AiCodingAgent.py --generate "..." --verbose
 
-```bash
-./run.sh demo           # Run all demo scenarios
-```
-
-### Help
-
-```bash
-./run.sh help
+# Help
 python ESIB_AiCodingAgent.py --help
 ```
 
@@ -357,21 +307,8 @@ python ESIB_AiCodingAgent.py --help
 | `OLLAMA_MODEL` | `qwen2.5-coder:7b` | LLM model to use |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama API endpoint |
 | `MAX_DEBUG_ITERATIONS` | `10` | Max debugging attempts |
-| `DEBUG_TIMEOUT` | `30` | Debugging timeout (seconds) |
-
-### Custom Configuration
-
-```bash
-# Set model
-export OLLAMA_MODEL=qwen3:8b
-
-# Use remote Ollama instance
-export OLLAMA_BASE_URL=http://192.168.1.100:11434
-
-# Adjust debugging limits
-export MAX_DEBUG_ITERATIONS=15
-export DEBUG_TIMEOUT=60
-```
+| `LLM_TIMEOUT` | `120` | LLM call timeout (seconds) |
+| `AGENT_WORKSPACE` | (cwd) | Working directory for guardrails |
 
 ---
 
@@ -379,158 +316,87 @@ export DEBUG_TIMEOUT=60
 
 ### Minimum
 
-- **OS:** Windows 10/11, macOS 12+, or Linux (Ubuntu 20.04+)
-- **RAM:** 8GB
-- **Disk:** 15GB free space
-- **Docker:** Version 20.10+
+- **OS:** Windows 10/11, macOS 12+, or Ubuntu 20.04+
+- **RAM:** 8 GB
+- **Disk:** 15 GB free
+- **Docker:** 20.10+
 - **Python:** 3.10+
 - **Internet:** Required for first-time model download
 
 ### Recommended
 
-- **RAM:** 16GB
-- **Disk:** 20GB+ free space
-- **GPU:** NVIDIA GPU with CUDA support (optional, for faster inference)
-
----
-
-## Testing
-
-### Health Check
-
-```bash
-./run.sh check
-```
-
-**Expected output:**
-```
-✅ Docker Engine         Docker is running
-✅ Ollama Service        Ollama is running on port 11434
-✅ AI Models             Both models available
-✅ Docker Image          Docker image exists
-✅ Python Dependencies   Dependencies installed
-
-System is ready to run!
-```
-
-### Run Test Suite
-
-```bash
-# Unit tests (if available)
-pytest tests/
-
-# Integration test via demo
-./run.sh demo
-```
+- **RAM:** 16 GB
+- **GPU:** NVIDIA with CUDA (optional — speeds up Ollama inference)
 
 ---
 
 ## Troubleshooting
 
-### Common Issues
+See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for the full guide.
 
-**Docker not running**
+### Quick fixes
+
+**Docker not running:**
 ```bash
-# Solution: Start Docker Desktop
-docker ps  # Should show empty list, not error
+docker ps   # Must return a list (even empty), not an error
+# Fix: Open Docker Desktop and wait for it to start
 ```
 
-**Ollama not responding**
+**Ollama not responding:**
 ```bash
-# Linux/Mac: Start Ollama
-ollama serve
-
-# Windows: Ollama should auto-start; reinstall if needed
-
-# Test
-curl http://localhost:11434/api/tags
+curl http://localhost:11434
+# Fix (Linux/Mac): ollama serve
+# Fix (Windows): check system tray for Ollama icon
 ```
 
-**Model not found**
+**Model not found / only qwen2.5-coder available:**
 ```bash
-# Download manually
-ollama pull qwen2.5-coder:7b
+ollama list   # Check what is installed
+
+# Run with whichever model is available
+python ESIB_AiCodingAgent.py --generate "..." --model qwen2.5-coder:7b
+
+# Or pull qwen3:8b when internet is available
 ollama pull qwen3:8b
-
-# Verify
-ollama list
 ```
-
-**Docker build fails**
-```bash
-# Check disk space
-df -h  # Need 2GB+ free
-
-# Build with verbose output
-docker build -t mariasabbagh1/esib-ai-agent:latest -f docker/Dockerfile .
-```
-
-**For more troubleshooting:** See [QUICKSTART.md](QUICKSTART.md) troubleshooting section
 
 ---
 
 ## Documentation
 
-- **[QUICKSTART.md](QUICKSTART.md)** - Complete setup and usage guide
-- **[DOCKER_HUB_GUIDE.md](docs/DOCKER_HUB_GUIDE.md)** - Docker Hub deployment details
-- **[IMPLEMENTATION_SUMMARY.md](docs/IMPLEMENTATION_SUMMARY.md)** - Technical implementation overview
+- **[QUICKSTART.md](QUICKSTART.md)** — Complete setup and usage guide
+- **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** — Detailed problem resolution
 
 ---
 
 ## Team
 
-**FYP 26/21 - AI Coding Agent**  
+**FYP 26/21 — AI Coding Agent**  
 École Supérieure d'Ingénieurs de Beyrouth (Université Saint-Joseph de Beyrouth)
 
-- **Maria Sabbagh** - Orchestrator & Docker Execution (Module 11)
-- **Joe Anthony Daoud** - Code Generation Pipeline (Module 3)
-- **Raymond Rached** - Debugging Service (Module 4)
-- **Elise Nassar** - Security & Guardrails (Module 7)
+| Name | Role |
+|------|------|
+| Maria Sabbagh | Orchestrator, Docker Execution, Logging, Memory (Modules 10–12) |
+| Joe Anthony Daoud | Code Generation Pipeline (Module 3) |
+| Raymond Rached | Debugging Service (Module 4) |
+| Elise Nassar | Security & Guardrails (Module 7) |
 
 **Supervisor:** Anthony Assi
 
 ---
 
-## Contributing
-
-This is an academic final year project. For questions or collaboration:
-
-1. Open an issue on GitHub
-2. Contact the team via university email
-
----
-
 ## License
 
-MIT License - See [LICENSE](LICENSE) file for details
+MIT License — see [LICENSE](LICENSE) for details.
 
 ---
 
 ## Acknowledgments
 
-- **École Supérieure d'Ingénieurs de Beyrouth (ESIB)** - Academic support
-- **Université Saint-Joseph de Beyrouth (USJ)** - Resources and guidance
-- **Anthony Assi** - Project supervision and technical guidance
-- **Ollama** - Local LLM execution framework
-- **Qwen Team** - qwen2.5-coder and qwen3 models
-
----
-
-## Citation
-
-If you use this work in your research, please cite:
-
-```bibtex
-@project{esib-ai-agent-2026,
-  title={AI Coding Agent: An Autonomous LLM Agent for Proactive Code Generation and Reactive Debugging},
-  author={Maria Sabbagh, Joe-Anthony Daoud and Raymond Rached and Elise Nassar},
-  year={2026},
-  school={École Supérieure d'Ingénieurs de Beyrouth, Université Saint-Joseph de Beyrouth},
-  supervisor={Mr.Anthony Assi},
-  type={Final Year Project},
-  number={FYP 26/21}
-}
-```
+- **École Supérieure d'Ingénieurs de Beyrouth (ESIB / USJ)** — academic support
+- **Anthony Assi** — project supervision
+- **Ollama** — local LLM execution framework
+- **Qwen Team** — qwen2.5-coder and qwen3 models
 
 ---
 
@@ -543,4 +409,4 @@ If you use this work in your research, please cite:
 
 ---
 
-*Last updated: April 18, 2026*
+*Last updated: April 22, 2026*

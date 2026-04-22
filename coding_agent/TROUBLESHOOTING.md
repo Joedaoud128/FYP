@@ -39,15 +39,32 @@ This guide helps resolve common issues with the ESIB AI Coding Agent.
 
 **Symptom:**
 ```
-Python 3.8 or higher required
+Python 3.10 or higher required
 ```
 
 **Solution:**
-1. Install Python 3.8+ from [python.org](https://python.org)
-2. Ensure Python is in your PATH:
+1. Install Python 3.10+ from [python.org](https://python.org)
+2. Ensure Python is in PATH:
    ```bash
-   python --version    # Should show 3.8+
+   python --version    # Should show 3.10+
    ```
+3. **Windows:** During installation, check "Add Python to PATH"
+
+---
+
+### Windows — venv not active when running commands
+
+**Symptom:**  
+Running `python ESIB_AiCodingAgent.py` gives `ModuleNotFoundError` for `yaml` or other dependencies, even after setup.
+
+**Solution:**  
+On Windows, CMD does not persist venv activation between sessions. Run `run.bat` first to open an activated shell:
+
+```cmd
+run.bat
+```
+
+Then type all Python commands inside that window. Do not close it during your session.
 
 ---
 
@@ -70,7 +87,6 @@ Python 3.8 or higher required
 
 **Linux:**
 ```bash
-# Ubuntu/Debian
 sudo apt-get update
 sudo apt-get install docker.io
 sudo systemctl start docker
@@ -94,10 +110,7 @@ sudo usermod -aG docker $USER
 
 **Solution:**
 
-**Windows/Mac:**
-1. Open Docker Desktop application
-2. Wait for "Docker Desktop is running" status
-3. Run setup/pre-check again
+**Windows/Mac:** Open Docker Desktop and wait for the whale icon to be steady ("Docker Desktop is running").
 
 **Linux:**
 ```bash
@@ -116,9 +129,7 @@ permission denied while trying to connect to the Docker daemon
 
 **Solution:**
 ```bash
-# Add your user to docker group
 sudo usermod -aG docker $USER
-
 # Log out and log back in, then test:
 docker run hello-world
 ```
@@ -134,7 +145,7 @@ ERROR: failed to build agent-sandbox image
 
 **Solution:**
 ```bash
-# Clean Docker cache and rebuild
+# Clean Docker cache and rebuild from project root
 docker system prune -a
 docker build -t agent-sandbox -f docker/Dockerfile .
 ```
@@ -152,23 +163,14 @@ docker build -t agent-sandbox -f docker/Dockerfile .
 
 **Solution:**
 
-**Windows:**
-```powershell
-# Download from https://ollama.com/download
-# Run installer
-# Ollama runs automatically on port 11434
-```
+**Windows:** Download from [ollama.com/download](https://ollama.com/download) and run the installer. Ollama starts automatically.
 
 **Linux:**
 ```bash
 curl -fsSL https://ollama.com/install.sh | sh
 ```
 
-**macOS:**
-```bash
-# Download from https://ollama.com/download
-# Install .dmg file
-```
+**macOS:** Download and install the .dmg from [ollama.com/download](https://ollama.com/download).
 
 ---
 
@@ -181,24 +183,21 @@ curl -fsSL https://ollama.com/install.sh | sh
 
 **Solution:**
 
-**Windows:**
-- Ollama should start automatically
-- Check system tray for Ollama icon
-- If not running: Start menu → Ollama
+**Windows:** Check the system tray for the Ollama icon. If missing, open Start menu → Ollama.
 
 **Linux/Mac:**
 ```bash
-# Start Ollama service
+# Start in foreground
 ollama serve
 
-# Or in background:
+# Or in background
 nohup ollama serve > /dev/null 2>&1 &
 ```
 
-**Check if running:**
+**Verify:**
 ```bash
 curl http://localhost:11434
-# Should return: "Ollama is running"
+# Expected: "Ollama is running"
 ```
 
 ---
@@ -212,14 +211,13 @@ Error: listen tcp :11434: bind: address already in use
 
 **Solution:**
 ```bash
-# Find what's using port 11434
+# Find what is using port 11434
 # Windows:
 netstat -ano | findstr :11434
-
 # Linux/Mac:
 lsof -i :11434
 
-# Kill the process or use different port
+# Or point the agent at a different port
 export OLLAMA_BASE_URL=http://localhost:11435
 ```
 
@@ -233,15 +231,44 @@ export OLLAMA_BASE_URL=http://localhost:11435
 ```
 [X] Model 'qwen3:8b' not found
 ```
+or the agent hangs/errors with an unrecognised model name.
 
-**Solution:**
+**Solution — use the model you have:**
 ```bash
-# Pull the model
-ollama pull qwen3:8b
+# Check what is installed
+ollama list
 
-# If slow, try smaller model first
+# If only qwen2.5-coder:7b is listed, pass --model explicitly:
+python ESIB_AiCodingAgent.py --generate "..." --model qwen2.5-coder:7b
+python ESIB_AiCodingAgent.py --fix script.py --model qwen2.5-coder:7b
+```
+
+**Solution — download the missing model:**
+```bash
+ollama pull qwen3:8b
 ollama pull qwen2.5-coder:7b
 ```
+
+> **Important:** If `qwen3:8b` is not available on your machine, always add `--model qwen2.5-coder:7b` to every command. The default falls back to `qwen2.5-coder:7b` but passing it explicitly avoids any ambiguity.
+
+---
+
+### Only `qwen2.5-coder:7b` is Available
+
+If you have not downloaded `qwen3:8b` (or cannot due to disk/network constraints), run every command with the explicit flag:
+
+```bash
+# Generate
+python ESIB_AiCodingAgent.py --generate "Create a calculator" --model qwen2.5-coder:7b
+
+# Debug
+python ESIB_AiCodingAgent.py --fix buggy.py --model qwen2.5-coder:7b
+
+# Demo
+python ESIB_AiCodingAgent.py --demo --model qwen2.5-coder:7b
+```
+
+`qwen2.5-coder:7b` is fully capable of handling all project tasks.
 
 ---
 
@@ -252,14 +279,11 @@ ollama pull qwen2.5-coder:7b
 Error pulling model: connection timeout
 ```
 
-**Solution:**
+**Solutions:**
 
-1. **Check internet connection**
-   ```bash
-   ping ollama.com
-   ```
+1. Check internet connection: `ping ollama.com`
 
-2. **Retry with timeout increase**
+2. Retry with a longer timeout:
    ```bash
    # Linux/Mac
    export OLLAMA_TIMEOUT=300
@@ -270,12 +294,12 @@ Error pulling model: connection timeout
    ollama pull qwen3:8b
    ```
 
-3. **Try alternative model**
+3. Start with the smaller model first:
    ```bash
-   ollama pull qwen2.5-coder:7b  # Smaller, faster download
+   ollama pull qwen2.5-coder:7b
    ```
 
-4. **Use proxy if needed**
+4. Use a proxy if needed:
    ```bash
    export HTTP_PROXY=http://proxy:port
    export HTTPS_PROXY=http://proxy:port
@@ -294,9 +318,10 @@ TimeoutError: Model loading exceeded 180s
 **Solution:**
 ```bash
 # Increase timeout
-export LLM_TIMEOUT=300  # 5 minutes
+export LLM_TIMEOUT=300   # Linux/Mac
+set LLM_TIMEOUT=300      # Windows CMD
 
-# Or use smaller model
+# Or switch to the smaller model
 python ESIB_AiCodingAgent.py --generate "..." --model qwen2.5-coder:7b
 ```
 
@@ -313,10 +338,9 @@ TimeoutError: LLM generation exceeded timeout
 
 **Solution:**
 ```bash
-# Increase timeout
 export LLM_TIMEOUT=300
 
-# Or simplify prompt
+# Or simplify the prompt
 python ESIB_AiCodingAgent.py --generate "Simple calculator"
 ```
 
@@ -329,31 +353,29 @@ python ESIB_AiCodingAgent.py --generate "Simple calculator"
 [Guardrails] DENY: <reason>
 ```
 
-**Solution:**
-
-Check `guardrails_config.yaml` and adjust policies:
+**Solution:**  
+Check `guardrails_config.yaml`. If the block is a false positive, review the relevant policy:
 ```yaml
-# If false positive, adjust patterns
 policies:
   PATH-01:
     enabled: true
-    # Check workspace_root matches your system
+    # Ensure workspace_root matches your actual working directory
 ```
 
 ---
 
-### Generated Code Not Running
+### Generated Code Has Import Errors (ModuleNotFoundError)
 
-**Symptom:**
-```
-Generated code has errors when executed
-```
+**Symptom:**  
+Generated code fails in Docker with `ModuleNotFoundError` for a third-party package.
 
 **Solution:**
-1. Check if dependencies are installed
-2. Try simpler prompt
-3. Use `--model qwen3:8b` for better quality
-4. Check Docker logs: `docker logs <container_id>`
+1. The orchestrator will automatically retry via the debugging loop.
+2. If the error persists after retries, try the `--fix` mode on the generated file:
+   ```bash
+   python ESIB_AiCodingAgent.py --fix src/generation/generated_code/script.py
+   ```
+3. For packages the sandbox cannot install, simplify the prompt to avoid that library.
 
 ---
 
@@ -368,12 +390,11 @@ Generated code has errors when executed
 ```
 
 **Solution:**
-1. **Update to latest debugging.py** (improved prompt)
-2. **Try qwen3:8b model:**
+1. Try `qwen3:8b` if available — it produces more structured output:
    ```bash
    python ESIB_AiCodingAgent.py --fix script.py --model qwen3:8b
    ```
-3. **Simplify test case** - start with single-error scripts
+2. Simplify the test case — start with single-error scripts.
 
 ---
 
@@ -385,9 +406,9 @@ Generated code has errors when executed
 ```
 
 **Solution:**
-1. Check logs for syntax errors
-2. Try different model: `--model qwen3:8b`
-3. Manually inspect LLM output in logs
+1. Check logs for the specific syntax error.
+2. Try a different model: `--model qwen3:8b` or `--model qwen2.5-coder:7b`.
+3. Inspect LLM output in the session log under `logs/`.
 
 ---
 
@@ -395,13 +416,14 @@ Generated code has errors when executed
 
 **Symptom:**
 ```
-Error: Same error repeated 3 times
+Error: Same error repeated 3 times — aborting retry loop
 ```
 
-**Solution:**
-1. The LLM couldn't fix the error
-2. Try qwen3:8b: `--model qwen3:8b`
-3. Fix manually and report the case
+**Solution:**  
+The LLM could not fix the error within the retry budget.
+1. Try a different model.
+2. Manually inspect the script and simplify the problematic section.
+3. Report the case with the session log attached.
 
 ---
 
@@ -416,12 +438,12 @@ Failed to connect to http://localhost:11434
 
 **Solution:**
 ```bash
-# Check Ollama is running
+# Verify Ollama is running
 curl http://localhost:11434
 
-# Check firewall
-# Windows: Allow Ollama through Windows Firewall
-# Linux: sudo ufw allow 11434
+# Windows: check firewall — allow Ollama through Windows Defender Firewall
+# Linux:
+sudo ufw allow 11434
 ```
 
 ---
@@ -435,7 +457,6 @@ Error response from daemon: network not found
 
 **Solution:**
 ```bash
-# Recreate Docker network
 docker network prune
 docker network create agent-network
 ```
@@ -444,16 +465,14 @@ docker network create agent-network
 
 ## Platform-Specific Issues
 
-### Windows: PowerShell curl Error
+### Windows: PowerShell `curl` Error
 
 **Symptom:**
 ```
 curl : The response content cannot be parsed because the Internet Explorer engine is not available
 ```
 
-**Solution:**
-- **Already fixed in latest code** - uses `curl.exe` instead of PowerShell alias
-- Or run from CMD instead of PowerShell
+**Solution:** Use `curl.exe` instead of the PowerShell alias, or switch to CMD.
 
 ---
 
@@ -465,10 +484,22 @@ curl : The response content cannot be parsed because the Internet Explorer engin
 ```
 
 **Solution:**
-1. Add Python to PATH:
-   - Windows Settings → System → Environment Variables
-   - Edit PATH, add: `C:\Python3X\` and `C:\Python3X\Scripts\`
-2. Restart terminal
+1. Open Settings → System → Environment Variables.
+2. Edit PATH — add `C:\Python3X\` and `C:\Python3X\Scripts\`.
+3. Restart terminal.
+
+---
+
+### Windows: venv Not Persisting Across CMD Windows
+
+**Symptom:**  
+Every time you open a new CMD window, `pyyaml` or other imports fail.
+
+**Solution:**  
+Always use `run.bat` to open your working session. It activates the `.venv` and keeps the shell open:
+```cmd
+run.bat
+```
 
 ---
 
@@ -485,7 +516,7 @@ PermissionError: [Errno 13] Permission denied
 sudo usermod -aG docker $USER
 # Log out and back in
 
-# For files
+# For scripts
 chmod +x setup.sh
 chmod +x run.sh
 ```
@@ -501,8 +532,6 @@ Docker platform mismatch
 
 **Solution:**
 ```bash
-# Ensure Docker Desktop is ARM64 version
-# Or add platform flag:
 docker build --platform linux/amd64 -t agent-sandbox -f docker/Dockerfile .
 ```
 
@@ -513,6 +542,7 @@ docker build --platform linux/amd64 -t agent-sandbox -f docker/Dockerfile .
 ### Enable Verbose Logging
 
 ```bash
+python ESIB_AiCodingAgent.py --generate "..." --verbose
 python ESIB_AiCodingAgent.py --fix script.py --verbose
 ```
 
@@ -520,8 +550,9 @@ python ESIB_AiCodingAgent.py --fix script.py --verbose
 
 ```
 logs/
-├── generation_<prompt_hash>_<timestamp>_logs.log
-└── debug_<script>_<timestamp>_logs.log
+├── generate_<script>_<timestamp>_logs.log
+├── debug_<script>_<timestamp>_logs.log
+└── pipeline_run_stats.jsonl
 ```
 
 ### System Health Check
@@ -530,22 +561,17 @@ logs/
 python pre_check.py
 ```
 
-Shows:
-- Python version
-- Docker status
-- Ollama status
-- Model availability
-- Dependencies
+Shows: Python version, Docker status, Ollama status, model availability, and dependency status.
 
 ---
 
 ### Report Issues
 
 If problems persist:
-1. Run health check: `python pre_check.py`
-2. Collect logs from `logs/` directory
-3. Note your system (Windows/Linux/Mac, versions)
-4. Contact your supervisor or team
+1. Run `python pre_check.py` and copy the output.
+2. Collect the relevant log from `logs/`.
+3. Note your OS, Python version, Docker version, and which Ollama models are installed (`ollama list`).
+4. Contact your supervisor or team.
 
 ---
 
@@ -554,15 +580,18 @@ If problems persist:
 | Issue | Quick Fix |
 |-------|-----------|
 | Docker not running | Start Docker Desktop |
-| Ollama not running | `ollama serve` |
-| Model missing | `ollama pull qwen3:8b` |
-| Setup fails | Check prerequisites, run `pre_check.py` |
-| Generation timeout | Increase `LLM_TIMEOUT=300` |
-| Debug fails | Try `--model qwen3:8b` |
-| Permission denied | Add to docker group, check file permissions |
-| Network issues | Check firewall, proxy settings |
+| Ollama not running | `ollama serve` (Linux/Mac) or check system tray (Windows) |
+| `qwen3:8b` not found | Add `--model qwen2.5-coder:7b` to your command |
+| Only qwen2.5-coder available | Always pass `--model qwen2.5-coder:7b` |
+| venv not active (Windows) | Run `run.bat` first |
+| Setup fails | Check prerequisites, then run `python pre_check.py` |
+| Generation timeout | Set `LLM_TIMEOUT=300` |
+| Debug fails / empty code | Try `--model qwen3:8b` or simplify the script |
+| Same error 3 times | Try different model or fix manually |
+| Permission denied (Linux) | Add user to docker group; `chmod +x` scripts |
+| Network issues | Check firewall and proxy settings |
 
 ---
 
-**Last Updated:** April 21, 2026  
+**Last Updated:** April 22, 2026  
 **Version:** 1.0.0

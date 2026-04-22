@@ -853,7 +853,9 @@ class _SubprocessDebugger:
         if ruff_match:
             raw_target = ruff_match.group(1).strip().strip('"')
             if " " in raw_target:
-                normalized_command = f'python -m ruff check "{raw_target.replace("\\", "/")}"'
+                # Fix: Pre-compute the replacement to avoid backslash in f-string
+                safe_target = raw_target.replace("\\", "/")
+                normalized_command = f'python -m ruff check "{safe_target}"'
 
         return normalized_command
 

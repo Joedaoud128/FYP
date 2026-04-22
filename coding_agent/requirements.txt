@@ -1,1 +1,11 @@
-pyyaml>=6.0
+# Core dependencies
+pyyaml>=6.0,<7.0
+
+# Optional system monitoring (for pre_check.py)
+psutil>=5.9.0
+
+# For better HTTP handling (fallback if urllib fails)
+requests>=2.31.0
+
+# For testing (optional, for development)
+pytest>=7.4.0
