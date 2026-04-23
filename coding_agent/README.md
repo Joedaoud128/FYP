@@ -55,42 +55,36 @@ ESIB AI Coding Agent is an autonomous AI system that generates Python code from 
 
 ### Installation (5 minutes)
 
+**Linux/Mac:**
 ```bash
-# Clone the repository
 git clone https://github.com/Joedaoud128/FYP.git
 cd FYP/coding_agent
-
-# Run setup
-./setup.sh        # Linux/Mac
-.\setup.bat       # Windows PowerShell
-setup.bat         # Windows CMD
+chmod +x setup.sh
+./setup.sh
+python pre_check.py     # verify everything is ready
 ```
+
+**Windows:**
+```cmd
+git clone https://github.com/Joedaoud128/FYP.git
+cd FYP\coding_agent
+.\setup.bat
+run.bat
+python pre_check.py
+```
+
+> On Windows, `run.bat` activates the `.venv` and opens a persistent shell. Run it after setup and at the start of every session — all Python commands go inside that window.
 
 The setup script will:
 - ✅ Verify Docker and Ollama are running
 - ✅ Create a Python virtual environment (`.venv`)
 - ✅ Install Python dependencies
-- ✅ Pull AI models (~10 GB, first time only)
-- ✅ Build or pull the Docker sandbox image
+- ✅ Pull the default AI model — `qwen3:8b` (~5 GB)
+- ✅ **Ask whether to also download `qwen2.5-coder:7b`** (~4.7 GB extra — optional)
+- ✅ Build the Docker sandbox image
 - ✅ Create necessary directories
 
-### Windows — activating the virtual environment
-
-On Windows, use `run.bat` to activate the virtual environment and get an interactive shell, then run Python commands directly:
-
-```cmd
-run.bat
-```
-
-After activation you will see a prompt like `(.venv) C:\...\coding_agent>`. From there:
-
-```cmd
-python ESIB_AiCodingAgent.py --generate "Create a simple calculator"
-python ESIB_AiCodingAgent.py --fix demos\03_broken_script.py
-python ESIB_AiCodingAgent.py --help
-```
-
-> `run.bat` is a **shell activator**, not a launcher — it opens a persistent CMD window with the venv active so you can type commands freely.
+> Answer **N** at the model prompt to skip the second model. You can always pull it later with `ollama pull qwen2.5-coder:7b`.
 
 ### Quick Demo
 
@@ -125,8 +119,8 @@ The system defaults to `qwen2.5-coder:7b`. Use `--model` to switch:
 
 | Model | Size | Notes |
 |-------|------|-------|
-| `qwen2.5-coder:7b` | ~4.7 GB | **Default** — optimised for code tasks |
-| `qwen3:8b` | ~5.0 GB | Newer general-purpose model |
+| `qwen3:8b` | ~5.0 GB | **Default** — pulled automatically during setup |
+| `qwen2.5-coder:7b` | ~4.7 GB | Optional fallback — pull manually if needed |
 
 ```bash
 # Use qwen3:8b

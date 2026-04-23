@@ -83,9 +83,14 @@ cd FYP\coding_agent
 :: 2. Run setup (5-10 min — downloads ~10 GB of models)
 .\setup.bat
 
-:: 3. Verify installation
+:: 3. Activate the virtual environment (opens a persistent CMD shell)
+run.bat
+
+:: 4. Verify installation (run inside the activated shell)
 python pre_check.py
 ```
+
+> After `run.bat`, all subsequent commands go inside the opened window.
 
 ### Linux / macOS
 
@@ -110,12 +115,35 @@ python pre_check.py
 
 1. ✅ Creates Python virtual environment (`.venv`)
 2. ✅ Installs Python dependencies (`pyyaml`, etc.)
-3. ✅ Pulls AI models — `qwen2.5-coder:7b` (~4.7 GB) and `qwen3:8b` (~5.0 GB)
-4. ✅ Builds Docker sandbox image (`agent-sandbox`)
-5. ✅ Creates required directories (`logs/`, `demos/`, etc.)
-6. ✅ Verifies system health
+3. ✅ Pulls the default AI model — `qwen3:8b` (~5.0 GB)
+4. ✅ **Asks whether you want to also download `qwen2.5-coder:7b`** (~4.7 GB extra)
+5. ✅ Builds Docker sandbox image (`agent-sandbox`)
+6. ✅ Creates required directories (`logs/`, `demos/`, etc.)
+7. ✅ Verifies system health
 
-**Total time:** 5–10 minutes | **Total download:** ~10 GB
+**Total time:** 5–10 minutes | **Minimum download:** ~5 GB (default model only)
+
+### Do you need the second model?
+
+During setup you will be prompted:
+
+```
+Optional: Download qwen2.5-coder:7b (~4.7 GB)?
+Download qwen2.5-coder:7b now? [y/N]:
+```
+
+Answer **N** (or press Enter) to skip it. Pull it later if you need it:
+
+```bash
+ollama pull qwen2.5-coder:7b
+```
+
+Pull it when you want to:
+- Switch to a dedicated code-specialised model
+- Compare outputs between the two models
+- Use `qwen2.5-coder:7b` as an explicit fallback if `qwen3:8b` is slow on your machine
+
+If you only plan to use `qwen3:8b`, skip this — no extra download needed.
 
 ---
 
@@ -363,7 +391,7 @@ set LLM_TIMEOUT=300
 - [ ] `python pre_check.py` — all green
 - [ ] `docker ps` — no errors
 - [ ] `curl http://localhost:11434` — returns "Ollama is running"
-- [ ] `ollama list` — shows at least `qwen2.5-coder:7b`
+- [ ] `ollama list` — shows at least `qwen3:8b`
 - [ ] Generation mode creates a working script in `src/generation/generated_code/`
 - [ ] Debug mode fixes a broken script
 - [ ] `logs/pipeline_run_stats.jsonl` is updated after each run

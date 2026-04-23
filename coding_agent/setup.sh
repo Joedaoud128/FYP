@@ -1,315 +1,270 @@
-@echo off
-REM ========================================================================
-REM  ESIB AI Coding Agent - Automated Setup Script (Windows)
-REM  FYP_26_21 | 2026
-REM ========================================================================
+#!/usr/bin/env bash
+# ============================================================================
+#  ESIB AI Coding Agent - Setup Script (Linux / macOS)
+#  FYP_26_21 | 2026
+# ============================================================================
 
-setlocal enabledelayedexpansion
+set -e
 
-echo ======================================================================
-echo   ESIB AI Coding Agent - Setup
-echo ======================================================================
-echo.
+BOLD="\033[1m"
+GREEN="\033[0;32m"
+YELLOW="\033[1;33m"
+RED="\033[0;31m"
+RESET="\033[0m"
 
-REM ========================================================================
-REM  STEP 0: Pre-flight Checks
-REM ========================================================================
+ok()   { echo -e "${GREEN}[OK]${RESET}  $*"; }
+warn() { echo -e "${YELLOW}[!]${RESET}   $*"; }
+err()  { echo -e "${RED}[X]${RESET}   $*"; }
+info() { echo -e "      $*"; }
 
-echo [Step 0/6] Running pre-flight checks...
-echo.
+echo ""
+echo "======================================================================"
+echo -e "  ${BOLD}ESIB AI Coding Agent - Setup${RESET}"
+echo "  FYP_26_21 | USJ Beirut | 2026"
+echo "======================================================================"
+echo ""
 
-REM Check Python
-python --version >nul 2>&1
-if errorlevel 1 (
-    echo [X] Python not found!
-    echo.
-    echo SOLUTION:
-    echo 1. Install Python 3.8 or higher from: https://python.org
-    echo 2. During installation, check "Add Python to PATH"
-    echo 3. Restart your terminal and run setup.bat again
-    echo.
-    pause
-    exit /b 1
-)
+# ============================================================================
+#  STEP 0: Pre-flight checks
+# ============================================================================
 
-for /f "tokens=2" %%i in ('python --version 2^>^&1') do set PYTHON_VERSION=%%i
-echo [OK] Python %PYTHON_VERSION% found
+echo "[Step 0/6] Running pre-flight checks..."
+echo ""
 
-REM Check Docker
-docker --version >nul 2>&1
-if errorlevel 1 (
-    echo [X] Docker not found!
-    echo.
-    echo SOLUTION:
-    echo 1. Install Docker Desktop from: https://docker.com/products/docker-desktop
-    echo 2. Install and restart your computer
-    echo 3. Start Docker Desktop
-    echo 4. Run setup.bat again
-    echo.
-    echo Need help? See docs\TROUBLESHOOTING.md
-    echo.
-    pause
-    exit /b 1
-)
-echo [OK] Docker installed
+HAS_ERROR=0
 
-REM Check if Docker is running
-docker ps >nul 2>&1
-if errorlevel 1 (
-    echo [X] Docker is not running!
-    echo.
-    echo SOLUTION:
-    echo 1. Start Docker Desktop from the Start menu
-    echo 2. Wait for "Docker Desktop is running" message
-    echo 3. Run setup.bat again
-    echo.
-    echo Need help? See docs\TROUBLESHOOTING.md
-    echo.
-    pause
-    exit /b 1
-)
-echo [OK] Docker is running
+# Python
+if ! command -v python3 &>/dev/null; then
+    err "Python 3 not found!"
+    info "Install Python 3.10+ from: https://python.org"
+    info "Linux:  sudo apt-get install python3 python3-venv python3-pip"
+    info "macOS:  brew install python@3.10"
+    HAS_ERROR=1
+else
+    PY_VERSION=$(python3 --version 2>&1 | awk '{print $2}')
+    ok "Python $PY_VERSION found"
+fi
 
-REM Check Ollama
-where ollama >nul 2>&1
-if errorlevel 1 (
-    echo [X] Ollama not found!
-    echo.
-    echo SOLUTION:
-    echo 1. Download Ollama from: https://ollama.com/download
-    echo 2. Run the installer
-    echo 3. Ollama will start automatically
-    echo 4. Run setup.bat again
-    echo.
-    echo Need help? See docs\TROUBLESHOOTING.md
-    echo.
-    pause
-    exit /b 1
-)
-echo [OK] Ollama installed
+# Docker
+if ! command -v docker &>/dev/null; then
+    err "Docker not found!"
+    info "Linux:  sudo apt-get install docker.io && sudo systemctl start docker"
+    info "macOS:  https://www.docker.com/products/docker-desktop"
+    HAS_ERROR=1
+elif ! docker ps &>/dev/null; then
+    err "Docker is installed but not running!"
+    info "Linux:  sudo systemctl start docker"
+    info "macOS:  open Docker Desktop"
+    HAS_ERROR=1
+else
+    DOCKER_VERSION=$(docker --version | awk '{print $3}' | tr -d ',')
+    ok "Docker running (version $DOCKER_VERSION)"
+fi
 
-REM Check if Ollama is running
-curl.exe -s http://localhost:11434 >nul 2>&1
-if errorlevel 1 (
-    echo [X] Ollama is not running on port 11434!
-    echo.
-    echo SOLUTION:
-    echo 1. Open a new terminal window
-    echo 2. Run: ollama serve
-    echo 3. Keep that window open
-    echo 4. Run setup.bat again in this window
-    echo.
-    echo Need help? See docs\TROUBLESHOOTING.md
-    echo.
-    pause
-    exit /b 1
-)
-echo [OK] Ollama is running on port 11434
+# Ollama
+if ! command -v ollama &>/dev/null; then
+    err "Ollama not found!"
+    info "Install: curl -fsSL https://ollama.com/install.sh | sh"
+    HAS_ERROR=1
+elif ! curl -s http://localhost:11434 &>/dev/null; then
+    err "Ollama installed but not running on port 11434!"
+    info "Start it: ollama serve &"
+    HAS_ERROR=1
+else
+    ok "Ollama running on localhost:11434"
+fi
 
-echo.
-echo [OK] All prerequisites satisfied!
-echo.
+# Disk space (warn if < 8 GB)
+FREE_KB=$(df -k . | awk 'NR==2 {print $4}')
+FREE_GB=$(( FREE_KB / 1024 / 1024 ))
+if [ "$FREE_GB" -lt 8 ]; then
+    warn "Low disk space: ~${FREE_GB} GB free. Recommended: 8+ GB."
+else
+    ok "Disk space: ~${FREE_GB} GB free"
+fi
 
-REM ========================================================================
-REM  STEP 1: Create Virtual Environment
-REM ========================================================================
+if [ "$HAS_ERROR" -ne 0 ]; then
+    echo ""
+    err "Pre-flight checks failed. Fix the issues above and run setup.sh again."
+    echo ""
+    exit 1
+fi
 
-echo [Step 1/6] Creating virtual environment...
-echo.
+echo ""
+ok "All prerequisites satisfied!"
+echo ""
 
-if exist ".venv" (
-    echo [!] Virtual environment already exists, skipping creation
-) else (
-    python -m venv .venv
-    if errorlevel 1 (
-        echo [X] Failed to create virtual environment!
-        echo.
-        echo SOLUTION:
-        echo 1. Ensure you have sufficient disk space
-        echo 2. Check Python installation
-        echo 3. Try: python -m pip install --upgrade pip
-        echo.
-        pause
-        exit /b 1
-    )
-    echo [OK] Virtual environment created
-)
+# ============================================================================
+#  STEP 1: Virtual environment
+# ============================================================================
 
-echo.
+echo "[Step 1/6] Creating virtual environment..."
+echo ""
 
-REM ========================================================================
-REM  STEP 2: Install Dependencies
-REM ========================================================================
+if [ -d ".venv" ]; then
+    warn "Virtual environment already exists — skipping creation"
+else
+    python3 -m venv .venv
+    ok "Virtual environment created (.venv)"
+fi
 
-echo [Step 2/6] Installing Python dependencies...
-echo.
+# Activate for the rest of this script
+# shellcheck disable=SC1091
+source .venv/bin/activate
 
-call .venv\Scripts\activate.bat
+echo ""
 
-if not exist "requirements.txt" (
-    echo [!] requirements.txt not found, creating minimal version...
-    echo pyyaml^>=6.0 > requirements.txt
-)
+# ============================================================================
+#  STEP 2: Python dependencies
+# ============================================================================
 
-python -m pip install --quiet --upgrade pip
-python -m pip install --quiet -r requirements.txt
+echo "[Step 2/6] Installing Python dependencies..."
+echo ""
 
-if errorlevel 1 (
-    echo [X] Failed to install dependencies!
-    echo.
-    echo SOLUTION:
-    echo 1. Check your internet connection
-    echo 2. Try: python -m pip install --upgrade pip
-    echo 3. Try: python -m pip install -r requirements.txt
-    echo.
-    echo Need help? See docs\TROUBLESHOOTING.md
-    echo.
-    pause
-    exit /b 1
-)
+if [ ! -f "requirements.txt" ]; then
+    warn "requirements.txt not found — creating minimal version"
+    echo "pyyaml>=6.0" > requirements.txt
+fi
 
-echo [OK] Dependencies installed
+python3 -m pip install --quiet --upgrade pip
+python3 -m pip install --quiet -r requirements.txt
 
-echo.
+ok "Dependencies installed"
+echo ""
 
-REM ========================================================================
-REM  STEP 3: Pull Ollama Models
-REM ========================================================================
+# ============================================================================
+#  STEP 3: Ollama models
+# ============================================================================
 
-echo [Step 3/6] Pulling Ollama models (this may take a while)...
-echo.
+echo "[Step 3/6] Setting up AI models..."
+echo ""
+echo "  Default model: qwen3:8b  (~5.0 GB)"
+echo "  Optional:      qwen2.5-coder:7b  (~4.7 GB extra)"
+echo ""
 
-echo [!] Pulling primary model: qwen3:8b (~4.7GB download)...
-ollama pull qwen3:8b
-if errorlevel 1 (
-    echo [X] Failed to pull qwen3:8b!
-    echo.
-    echo SOLUTION:
-    echo 1. Check your internet connection
-    echo 2. Ensure sufficient disk space (~5GB)
-    echo 3. Try manually: ollama pull qwen3:8b
-    echo.
-    echo Continuing with fallback model...
-    echo.
-)
+# Always pull the default model
+if ollama list 2>/dev/null | grep -q "qwen3:8b"; then
+    ok "qwen3:8b already present"
+else
+    info "Pulling qwen3:8b (~5.0 GB) — this may take several minutes..."
+    if ollama pull qwen3:8b; then
+        ok "qwen3:8b downloaded"
+    else
+        err "Failed to pull qwen3:8b"
+        info "Try manually:  ollama pull qwen3:8b"
+        info "Check your internet connection and available disk space (~5 GB)."
+        echo ""
+        exit 1
+    fi
+fi
 
-echo.
-echo [!] Pulling fallback model: qwen2.5-coder:7b (~4.7GB download)...
-ollama pull qwen2.5-coder:7b
-if errorlevel 1 (
-    echo [X] Failed to pull qwen2.5-coder:7b!
-    echo.
-    echo SOLUTION:
-    echo 1. Check your internet connection
-    echo 2. Ensure sufficient disk space (~5GB)
-    echo 3. Try manually: ollama pull qwen2.5-coder:7b
-    echo.
-    echo Need help? See docs\TROUBLESHOOTING.md
-    echo.
-    pause
-    exit /b 1
-)
+# Ask about the second model
+echo ""
+echo -e "  ${BOLD}Optional:${RESET} Do you also want to download qwen2.5-coder:7b (~4.7 GB)?"
+echo "  This is a code-specialised fallback model. You can always pull it later."
+echo ""
+read -r -p "  Download qwen2.5-coder:7b now? [y/N]: " PULL_FALLBACK
 
-echo [OK] Models pulled successfully
+if [[ "$PULL_FALLBACK" =~ ^[Yy]$ ]]; then
+    if ollama list 2>/dev/null | grep -q "qwen2.5-coder:7b"; then
+        ok "qwen2.5-coder:7b already present"
+    else
+        info "Pulling qwen2.5-coder:7b (~4.7 GB)..."
+        if ollama pull qwen2.5-coder:7b; then
+            ok "qwen2.5-coder:7b downloaded"
+        else
+            warn "Failed to pull qwen2.5-coder:7b"
+            info "You can pull it later:  ollama pull qwen2.5-coder:7b"
+        fi
+    fi
+else
+    info "Skipping qwen2.5-coder:7b. Pull later with:  ollama pull qwen2.5-coder:7b"
+fi
 
-echo.
+echo ""
 
-REM ========================================================================
-REM  STEP 4: Build Docker Image
-REM ========================================================================
+# ============================================================================
+#  STEP 4: Docker sandbox image
+# ============================================================================
 
-echo [Step 4/6] Building Docker sandbox image...
-echo.
+echo "[Step 4/6] Building Docker sandbox image..."
+echo ""
 
-if not exist "docker\Dockerfile" (
-    echo [X] Dockerfile not found at docker\Dockerfile!
-    echo.
-    echo SOLUTION:
-    echo 1. Ensure you're in the correct directory (coding_agent/)
-    echo 2. Check that docker\Dockerfile exists
-    echo 3. Re-download the project if needed
-    echo.
-    pause
-    exit /b 1
-)
+if [ ! -f "docker/Dockerfile" ]; then
+    err "Dockerfile not found at docker/Dockerfile!"
+    info "Make sure you are running this script from the project root (coding_agent/)."
+    exit 1
+fi
 
-docker build -t agent-sandbox -f docker\Dockerfile .
-if errorlevel 1 (
-    echo [X] Failed to build Docker image!
-    echo.
-    echo SOLUTION:
-    echo 1. Check Docker is running
-    echo 2. Try: docker system prune -a
-    echo 3. Try build again: docker build -t agent-sandbox -f docker\Dockerfile .
-    echo.
-    echo Need help? See docs\TROUBLESHOOTING.md
-    echo.
-    pause
-    exit /b 1
-)
+if docker image inspect agent-sandbox &>/dev/null; then
+    ok "Docker image 'agent-sandbox' already exists"
+else
+    info "Building agent-sandbox image (first time may take ~1–2 min)..."
+    if docker build -t agent-sandbox -f docker/Dockerfile . --quiet; then
+        ok "Docker image built successfully"
+    else
+        err "Docker build failed"
+        info "Try:  docker system prune -a  then run setup.sh again"
+        info "Or build manually:  docker build -t agent-sandbox -f docker/Dockerfile ."
+        exit 1
+    fi
+fi
 
-echo [OK] Docker image built successfully
+echo ""
 
-echo.
+# ============================================================================
+#  STEP 5: Directories
+# ============================================================================
 
-REM ========================================================================
-REM  STEP 5: Create Required Directories
-REM ========================================================================
+echo "[Step 5/6] Creating required directories..."
+echo ""
 
-echo [Step 5/6] Creating required directories...
-echo.
+mkdir -p logs
+mkdir -p demos
+mkdir -p src/generation/generated_code
+mkdir -p memory_store
+mkdir -p docs
 
-if not exist "logs" mkdir logs
-if not exist "demos" mkdir demos
+ok "Directories ready"
+echo ""
 
-REM Create directories within src folders (not at root)
-if not exist "src\generation\generated_code" mkdir src\generation\generated_code
-if not exist "src\orchestrator\memory_store" mkdir src\orchestrator\memory_store
-if not exist "docs" mkdir docs
+# ============================================================================
+#  STEP 6: Verification
+# ============================================================================
 
-echo [OK] Directories created
+echo "[Step 6/6] Running system verification..."
+echo ""
 
-echo.
+if [ -f "pre_check.py" ]; then
+    python3 pre_check.py
+    echo ""
+else
+    warn "pre_check.py not found — skipping verification"
+fi
 
-REM ========================================================================
-REM  STEP 6: Verification
-REM ========================================================================
+# ============================================================================
+#  Done
+# ============================================================================
 
-echo [Step 6/6] Running system verification...
-echo.
-
-if exist "pre_check.py" (
-    python pre_check.py
-    echo.
-) else (
-    echo [!] pre_check.py not found, skipping verification
-    echo.
-)
-
-REM ========================================================================
-REM  Setup Complete
-REM ========================================================================
-
-echo ======================================================================
-echo   SETUP COMPLETE!
-echo ======================================================================
-echo.
-echo Next steps:
-echo.
-echo 1. Test generation mode:
-echo    python ESIB_AiCodingAgent.py --generate "Create a simple calculator"
-echo.
-echo 2. Test debug mode:
-echo    python ESIB_AiCodingAgent.py --fix demos\03_broken_script.py
-echo.
-echo 3. Use convenience wrapper:
-echo    .\run.bat generate "Create a web scraper"
-echo    .\run.bat fix script.py
-echo.
-echo For help:
-echo    python ESIB_AiCodingAgent.py --help
-echo    See docs\TROUBLESHOOTING.md for common issues
-echo.
-echo ======================================================================
-
-pause
+echo "======================================================================"
+echo -e "  ${GREEN}${BOLD}SETUP COMPLETE!${RESET}"
+echo "======================================================================"
+echo ""
+echo "  Next steps:"
+echo ""
+echo "  1. Generate code:"
+echo "     python3 ESIB_AiCodingAgent.py --generate \"Create a simple calculator\""
+echo ""
+echo "  2. Debug a script:"
+echo "     python3 ESIB_AiCodingAgent.py --fix demos/03_broken_script.py"
+echo ""
+echo "  3. Run the demo:"
+echo "     python3 ESIB_AiCodingAgent.py --demo"
+echo ""
+echo "  4. Get help:"
+echo "     python3 ESIB_AiCodingAgent.py --help"
+echo ""
+echo "  For issues: see TROUBLESHOOTING.md"
+echo ""
+echo "======================================================================"
+echo ""
