@@ -5,7 +5,7 @@ pre_check.py - System Health Check
 Quick verification that all components are ready.
 Does NOT fix problems - just reports status.
 
-For setup/installation, use setup.bat or setup.sh instead.
+For setup/installation, use setup.bat (Windows) or setup.sh (Linux/macOS).
 """
 
 import subprocess
@@ -57,9 +57,7 @@ def check_docker():
 
 def check_ollama():
     """Check if Ollama is accessible"""
-    # Try multiple methods to check Ollama
     try:
-        # Try curl first (most reliable)
         curl_cmd = "curl.exe" if platform.system() == "Windows" else "curl"
         result = subprocess.run(
             [curl_cmd, "-s", "http://localhost:11434/api/tags"],
@@ -69,10 +67,10 @@ def check_ollama():
         )
         if result.returncode == 0 and result.stdout:
             return True, "Ollama is running on port 11434"
-    except:
+    except Exception:
         pass
-    
-    # Try Python urllib as fallback
+
+    # Fallback: Python urllib
     try:
         import urllib.request
         import json
@@ -81,9 +79,9 @@ def check_ollama():
             data = json.loads(response.read())
             if "models" in data:
                 return True, "Ollama is running on port 11434"
-    except:
+    except Exception:
         pass
-    
+
     return False, "Ollama is not responding on port 11434"
 
 
@@ -97,22 +95,22 @@ def check_models():
             text=True,
             timeout=5
         )
-        
+
         if not result.stdout:
             return False, "Cannot check models - Ollama not responding"
-        
+
         models_found = []
         if "qwen2.5-coder:7b" in result.stdout:
             models_found.append("qwen2.5-coder:7b")
         if "qwen3:8b" in result.stdout:
             models_found.append("qwen3:8b")
-        
+
         if len(models_found) == 2:
             return True, f"Both models available: {', '.join(models_found)}"
         elif len(models_found) == 1:
             return True, f"Model available: {models_found[0]} (other model optional)"
         else:
-            return False, "No models found - run setup.bat to download"
+            return False, "No models found - run setup.sh (Linux/macOS) or setup.bat (Windows)"
     except Exception as e:
         return False, f"Cannot check models: {str(e)[:50]}"
 
@@ -128,7 +126,7 @@ def check_docker_image():
         )
         if result.stdout.strip():
             return True, "Docker image 'agent-sandbox' exists"
-        return False, "Docker image not built - run setup.bat"
+        return False, "Docker image not built - run setup.sh (Linux/macOS) or setup.bat (Windows)"
     except Exception:
         return False, "Cannot check Docker images"
 
@@ -137,7 +135,6 @@ def check_python_deps():
     """Check if Python dependencies are installed"""
     try:
         import yaml
-        # Check psutil (optional)
         try:
             import psutil
             return True, "All dependencies installed (pyyaml, psutil)"
@@ -149,15 +146,21 @@ def check_python_deps():
 
 def check_venv():
     """Check if virtual environment exists and is activated"""
-    in_venv = hasattr(sys, 'real_prefix') or (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix)
-    
+    in_venv = hasattr(sys, 'real_prefix') or (
+        hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix
+    )
+
     venv_path = os.environ.get("VIRTUAL_ENV", "")
     if venv_path:
         return True, f"Virtual environment active: {os.path.basename(venv_path)}"
     elif in_venv:
         return True, "Virtual environment active"
     else:
-        return False, "Not in virtual environment (run .venv\\Scripts\\activate on Windows)"
+        if platform.system() == "Windows":
+            hint = "run.bat"
+        else:
+            hint = "./run.sh  or  source .venv/bin/activate"
+        return False, f"Not in virtual environment - activate with: {hint}"
 
 
 def main():
@@ -165,65 +168,76 @@ def main():
     print("ESIB AI Coding Agent - Health Check")
     print("=" * 70)
     print()
-    
+
     # System info
     print(f"System: {platform.system()} {platform.release()}")
     print(f"Architecture: {platform.machine()}")
     print()
-    
+
     checks = [
-        ("Python Version", check_python),
+        ("Python Version",      check_python),
         ("Virtual Environment", check_venv),
-        ("Disk Space", check_disk_space),
-        ("Docker Engine", check_docker),
-        ("Ollama Service", check_ollama),
-        ("AI Models", check_models),
-        ("Docker Image", check_docker_image),
+        ("Disk Space",          check_disk_space),
+        ("Docker Engine",       check_docker),
+        ("Ollama Service",      check_ollama),
+        ("AI Models",           check_models),
+        ("Docker Image",        check_docker_image),
         ("Python Dependencies", check_python_deps),
     ]
-    
+
     all_passed = True
     warnings = []
-    
+
     for name, check_func in checks:
         passed, message = check_func()
         status = "✅" if passed else "❌" if "not" in message.lower() or "missing" in message.lower() else "⚠️"
-        
-        # Handle warnings differently
+
+        # Treat low-disk and optional-model results as warnings, not failures
         if not passed and ("Low disk" in message or "optional" in message):
             warnings.append(f"{name}: {message}")
             status = "⚠️"
-            passed = True  # Don't fail for warnings
-        
+            passed = True
+
         print(f"{status} {name:20} {message}")
         if not passed:
             all_passed = False
-    
+
     print()
     print("=" * 70)
-    
+
     if warnings:
-        print("⚠️ Warnings:")
+        print("⚠️  Warnings:")
         for warning in warnings:
             print(f"  - {warning}")
         print()
-    
+
     if all_passed:
         print("✅ System is ready to run!")
         print()
         print("Quick start:")
-        print("  run.bat demo")
-        print("  run.bat generate 'your prompt'")
-        print("  python ESIB_AiCodingAgent.py --generate 'your prompt'")
+        if platform.system() == "Windows":
+            print("  run.bat")
+            print("  python ESIB_AiCodingAgent.py --generate 'your prompt'")
+            print("  python ESIB_AiCodingAgent.py --fix demos\\03_broken_script.py")
+        else:
+            print("  ./run.sh")
+            print("  python3 ESIB_AiCodingAgent.py --generate 'your prompt'")
+            print("  python3 ESIB_AiCodingAgent.py --fix demos/03_broken_script.py")
         return 0
     else:
         print("❌ System is not ready")
         print()
         print("To fix issues:")
-        print("  1. Run: setup.bat")
-        print("  2. If setup fails, see TROUBLESHOOTING.md")
-        print("  3. Ensure Docker Desktop is running")
-        print("  4. Ensure Ollama is running (check system tray)")
+        if platform.system() == "Windows":
+            print("  1. Run: setup.bat")
+            print("  2. If setup fails, see TROUBLESHOOTING.md")
+            print("  3. Ensure Docker Desktop is running")
+            print("  4. Ensure Ollama is running (check system tray)")
+        else:
+            print("  1. Run: ./setup.sh")
+            print("  2. If setup fails, see TROUBLESHOOTING.md")
+            print("  3. Ensure Docker is running")
+            print("  4. Ensure Ollama is running: ollama serve")
         return 1
 
 

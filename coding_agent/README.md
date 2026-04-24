@@ -35,7 +35,7 @@ ESIB AI Coding Agent is an autonomous AI system that generates Python code from 
 - 🔄 **Model Flexibility**
   - Support for multiple LLM models
   - Easy model switching via `--model` CLI flag
-  - Supported models: `qwen2.5-coder:7b` (default), `qwen3:8b`
+  - Supported models: `qwen3:8b` (default), `qwen2.5-coder:7b`
 
 - 🚀 **Production-Ready**
   - Pre-built Docker image on Docker Hub
@@ -55,13 +55,13 @@ ESIB AI Coding Agent is an autonomous AI system that generates Python code from 
 
 ### Installation (5 minutes)
 
-**Linux/Mac:**
+**Linux/macOS:**
 ```bash
 git clone https://github.com/Joedaoud128/FYP.git
 cd FYP/coding_agent
-chmod +x setup.sh
+chmod +x setup.sh run.sh
 ./setup.sh
-python pre_check.py     # verify everything is ready
+python3 pre_check.py     # verify everything is ready
 ```
 
 **Windows:**
@@ -72,8 +72,6 @@ cd FYP\coding_agent
 run.bat
 python pre_check.py
 ```
-
-> On Windows, `run.bat` activates the `.venv` and opens a persistent shell. Run it after setup and at the start of every session — all Python commands go inside that window.
 
 The setup script will:
 - ✅ Verify Docker and Ollama are running
@@ -86,36 +84,47 @@ The setup script will:
 
 > Answer **N** at the model prompt to skip the second model. You can always pull it later with `ollama pull qwen2.5-coder:7b`.
 
-### Quick Demo
+### Activating the Virtual Environment
 
-**Linux/Mac:**
+Both platforms work the same way: run the activation script at the start of each session, then type all commands inside the opened shell.
+
+**Linux/macOS:**
 ```bash
-python ESIB_AiCodingAgent.py --demo
+./run.sh
 ```
 
-**Windows (after `run.bat`):**
+**Windows:**
 ```cmd
-python ESIB_AiCodingAgent.py --demo
+run.bat
+```
+
+> `run.sh` and `run.bat` activate the `.venv` and open a persistent shell. Run them after setup and at the start of every new session — all Python commands go inside that window.
+
+### Quick Demo
+
+```bash
+python3 ESIB_AiCodingAgent.py --demo       # Linux/macOS (inside ./run.sh shell)
+python ESIB_AiCodingAgent.py --demo        # Windows (inside run.bat shell)
 ```
 
 ### Basic Usage
 
 **Generate code:**
 ```bash
-python ESIB_AiCodingAgent.py --generate "Write a web scraper for Hacker News"
-python ESIB_AiCodingAgent.py --generate "Write a CSV parser"
+python3 ESIB_AiCodingAgent.py --generate "Write a web scraper for Hacker News"
+python3 ESIB_AiCodingAgent.py --generate "Write a CSV parser"
 ```
 
 **Debug code:**
 ```bash
-python ESIB_AiCodingAgent.py --fix path/to/broken_script.py
+python3 ESIB_AiCodingAgent.py --fix path/to/broken_script.py
 ```
 
 ---
 
 ## Model Selection
 
-The system defaults to `qwen2.5-coder:7b`. Use `--model` to switch:
+The system defaults to `qwen3:8b`. Use `--model` to switch:
 
 | Model | Size | Notes |
 |-------|------|-------|
@@ -123,18 +132,18 @@ The system defaults to `qwen2.5-coder:7b`. Use `--model` to switch:
 | `qwen2.5-coder:7b` | ~4.7 GB | Optional fallback — pull manually if needed |
 
 ```bash
-# Use qwen3:8b
-python ESIB_AiCodingAgent.py --generate "Build a REST API" --model qwen3:8b
+# Use qwen3:8b explicitly
+python3 ESIB_AiCodingAgent.py --generate "Build a REST API" --model qwen3:8b
 
-# Explicitly use qwen2.5-coder (e.g. if qwen3 is not available)
-python ESIB_AiCodingAgent.py --generate "Build a REST API" --model qwen2.5-coder:7b
+# Use qwen2.5-coder (e.g. if qwen3 is unavailable)
+python3 ESIB_AiCodingAgent.py --generate "Build a REST API" --model qwen2.5-coder:7b
 ```
 
 > **If `qwen3:8b` is not available on your machine**, always add `--model qwen2.5-coder:7b` so the agent uses the correct model. Check available models with `ollama list`.
 
 **Set a session default via environment variable:**
 ```bash
-export OLLAMA_MODEL=qwen2.5-coder:7b      # Linux/Mac
+export OLLAMA_MODEL=qwen2.5-coder:7b      # Linux/macOS
 set OLLAMA_MODEL=qwen2.5-coder:7b         # Windows CMD
 $env:OLLAMA_MODEL="qwen2.5-coder:7b"      # Windows PowerShell
 ```
@@ -217,8 +226,7 @@ coding_agent/
 ├── pre_check.py               # System health check
 ├── requirements.txt           # Python dependencies
 ├── setup.sh / setup.bat       # One-command setup scripts
-├── run.sh                     # Linux/Mac convenience launcher
-├── run.bat                    # Windows venv activator
+├── run.sh / run.bat           # Virtual environment activators
 ├── docker/
 │   └── Dockerfile             # Hardened sandbox image
 ├── demos/                     # Example scenarios
@@ -236,24 +244,24 @@ coding_agent/
 ### Generate code
 
 ```bash
-python ESIB_AiCodingAgent.py --generate "Create a web scraper that extracts the top 10 Hacker News stories with titles, URLs, and scores. Save to JSON."
-python ESIB_AiCodingAgent.py --generate "Read a CSV file with sales data and create a bar chart of revenue by product. Use pandas and matplotlib."
+python3 ESIB_AiCodingAgent.py --generate "Create a web scraper that extracts the top 10 Hacker News stories with titles, URLs, and scores. Save to JSON."
+python3 ESIB_AiCodingAgent.py --generate "Read a CSV file with sales data and create a bar chart of revenue by product. Use pandas and matplotlib."
 ```
 
 ### Debug a broken script
 
 ```bash
-python ESIB_AiCodingAgent.py --fix demos/03_broken_script.py
+python3 ESIB_AiCodingAgent.py --fix demos/03_broken_script.py
 ```
 
 ### Use a specific model
 
 ```bash
-# Explicitly select qwen2.5-coder (e.g. if qwen3 is unavailable)
-python ESIB_AiCodingAgent.py --generate "Build a REST API client" --model qwen2.5-coder:7b
+# Use qwen2.5-coder (e.g. if qwen3 is unavailable)
+python3 ESIB_AiCodingAgent.py --generate "Build a REST API client" --model qwen2.5-coder:7b
 
 # Use qwen3 for complex tasks
-python ESIB_AiCodingAgent.py --generate "Build a REST API client" --model qwen3:8b
+python3 ESIB_AiCodingAgent.py --generate "Build a REST API client" --model qwen3:8b
 ```
 
 ---
@@ -262,32 +270,32 @@ python ESIB_AiCodingAgent.py --generate "Build a REST API client" --model qwen3:
 
 ```bash
 # Health check
-python pre_check.py
+python3 pre_check.py
 
-# Generate — default model
-python ESIB_AiCodingAgent.py --generate "your prompt"
+# Generate — default model (qwen3:8b)
+python3 ESIB_AiCodingAgent.py --generate "your prompt"
 
 # Generate — specific model
-python ESIB_AiCodingAgent.py --generate "your prompt" --model qwen2.5-coder:7b
-python ESIB_AiCodingAgent.py --generate "your prompt" --model qwen3:8b
+python3 ESIB_AiCodingAgent.py --generate "your prompt" --model qwen2.5-coder:7b
+python3 ESIB_AiCodingAgent.py --generate "your prompt" --model qwen3:8b
 
 # Generate — save to custom path
-python ESIB_AiCodingAgent.py --generate "your prompt" --output my_script.py
+python3 ESIB_AiCodingAgent.py --generate "your prompt" --output my_script.py
 
 # Debug
-python ESIB_AiCodingAgent.py --fix script.py
-python ESIB_AiCodingAgent.py --fix script.py --model qwen2.5-coder:7b
+python3 ESIB_AiCodingAgent.py --fix script.py
+python3 ESIB_AiCodingAgent.py --fix script.py --model qwen2.5-coder:7b
 
 # Demo
-python ESIB_AiCodingAgent.py --demo
-python ESIB_AiCodingAgent.py --demo --demo-mode generate
-python ESIB_AiCodingAgent.py --demo --demo-mode debug
+python3 ESIB_AiCodingAgent.py --demo
+python3 ESIB_AiCodingAgent.py --demo --demo-mode generate
+python3 ESIB_AiCodingAgent.py --demo --demo-mode debug
 
 # Verbose logging
-python ESIB_AiCodingAgent.py --generate "..." --verbose
+python3 ESIB_AiCodingAgent.py --generate "..." --verbose
 
 # Help
-python ESIB_AiCodingAgent.py --help
+python3 ESIB_AiCodingAgent.py --help
 ```
 
 ---
@@ -298,7 +306,7 @@ python ESIB_AiCodingAgent.py --help
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `OLLAMA_MODEL` | `qwen2.5-coder:7b` | LLM model to use |
+| `OLLAMA_MODEL` | `qwen3:8b` | LLM model to use |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama API endpoint |
 | `MAX_DEBUG_ITERATIONS` | `10` | Max debugging attempts |
 | `LLM_TIMEOUT` | `120` | LLM call timeout (seconds) |
@@ -334,12 +342,13 @@ See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for the full guide.
 ```bash
 docker ps   # Must return a list (even empty), not an error
 # Fix: Open Docker Desktop and wait for it to start
+# Linux: sudo systemctl start docker
 ```
 
 **Ollama not responding:**
 ```bash
 curl http://localhost:11434
-# Fix (Linux/Mac): ollama serve
+# Fix (Linux/macOS): ollama serve
 # Fix (Windows): check system tray for Ollama icon
 ```
 
@@ -348,7 +357,7 @@ curl http://localhost:11434
 ollama list   # Check what is installed
 
 # Run with whichever model is available
-python ESIB_AiCodingAgent.py --generate "..." --model qwen2.5-coder:7b
+python3 ESIB_AiCodingAgent.py --generate "..." --model qwen2.5-coder:7b
 
 # Or pull qwen3:8b when internet is available
 ollama pull qwen3:8b
@@ -403,4 +412,4 @@ MIT License — see [LICENSE](LICENSE) for details.
 
 ---
 
-*Last updated: April 22, 2026*
+*Last updated: April 24, 2026*

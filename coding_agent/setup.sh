@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # ============================================================================
 #  ESIB AI Coding Agent - Setup Script (Linux / macOS)
-#  FYP_26_21 | 2026
+#  FYP_26_21 | USJ Beirut | 2026
 # ============================================================================
-
-set -e
+# NOTE: We do NOT use "set -e" here.  Several checks (grep, curl, docker)
+#       return non-zero exit codes in normal "not-found" paths, and we want
+#       to handle each one explicitly rather than abort the whole script.
 
 BOLD="\033[1m"
 GREEN="\033[0;32m"
@@ -33,54 +34,84 @@ echo ""
 
 HAS_ERROR=0
 
-# Python
+# --- Python ----------------------------------------------------------------
 if ! command -v python3 &>/dev/null; then
     err "Python 3 not found!"
-    info "Install Python 3.10+ from: https://python.org"
-    info "Linux:  sudo apt-get install python3 python3-venv python3-pip"
-    info "macOS:  brew install python@3.10"
+    echo ""
+    info "SOLUTION:"
+    info "  Linux:  sudo apt-get install python3 python3-venv python3-pip"
+    info "  macOS:  brew install python@3.10"
+    info "  Or download from: https://python.org"
+    echo ""
     HAS_ERROR=1
 else
     PY_VERSION=$(python3 --version 2>&1 | awk '{print $2}')
     ok "Python $PY_VERSION found"
 fi
 
-# Docker
+# --- Docker installed -------------------------------------------------------
 if ! command -v docker &>/dev/null; then
     err "Docker not found!"
-    info "Linux:  sudo apt-get install docker.io && sudo systemctl start docker"
-    info "macOS:  https://www.docker.com/products/docker-desktop"
-    HAS_ERROR=1
-elif ! docker ps &>/dev/null; then
-    err "Docker is installed but not running!"
-    info "Linux:  sudo systemctl start docker"
-    info "macOS:  open Docker Desktop"
+    echo ""
+    info "SOLUTION:"
+    info "  Linux:  sudo apt-get update && sudo apt-get install docker.io"
+    info "          sudo systemctl start docker"
+    info "          sudo usermod -aG docker \$USER   # then log out and back in"
+    info "  macOS:  https://www.docker.com/products/docker-desktop"
+    echo ""
     HAS_ERROR=1
 else
-    DOCKER_VERSION=$(docker --version | awk '{print $3}' | tr -d ',')
-    ok "Docker running (version $DOCKER_VERSION)"
+    # --- Docker running ------------------------------------------------------
+    if ! docker ps &>/dev/null; then
+        err "Docker is installed but not running!"
+        echo ""
+        info "SOLUTION:"
+        info "  Linux:  sudo systemctl start docker"
+        info "  macOS:  open Docker Desktop from Applications"
+        info "  Then run setup.sh again."
+        echo ""
+        HAS_ERROR=1
+    else
+        DOCKER_VERSION=$(docker --version | awk '{print $3}' | tr -d ',')
+        ok "Docker running (version $DOCKER_VERSION)"
+    fi
 fi
 
-# Ollama
+# --- Ollama installed -------------------------------------------------------
 if ! command -v ollama &>/dev/null; then
     err "Ollama not found!"
-    info "Install: curl -fsSL https://ollama.com/install.sh | sh"
-    HAS_ERROR=1
-elif ! curl -s http://localhost:11434 &>/dev/null; then
-    err "Ollama installed but not running on port 11434!"
-    info "Start it: ollama serve &"
+    echo ""
+    info "SOLUTION:"
+    info "  Linux/macOS: curl -fsSL https://ollama.com/install.sh | sh"
+    info "  macOS (DMG): https://ollama.com/download"
+    info "  After installing, run:  ollama serve &"
+    echo ""
     HAS_ERROR=1
 else
-    ok "Ollama running on localhost:11434"
+    # --- Ollama running ------------------------------------------------------
+    if ! curl -s http://localhost:11434 &>/dev/null; then
+        err "Ollama is installed but not running on port 11434!"
+        echo ""
+        info "SOLUTION:"
+        info "  Run in a separate terminal:  ollama serve"
+        info "  Or in background:            nohup ollama serve > /dev/null 2>&1 &"
+        info "  Then run setup.sh again."
+        echo ""
+        HAS_ERROR=1
+    else
+        ok "Ollama running on localhost:11434"
+    fi
 fi
 
-# Disk space (warn if < 8 GB)
-FREE_KB=$(df -k . | awk 'NR==2 {print $4}')
-FREE_GB=$(( FREE_KB / 1024 / 1024 ))
-if [ "$FREE_GB" -lt 8 ]; then
-    warn "Low disk space: ~${FREE_GB} GB free. Recommended: 8+ GB."
-else
-    ok "Disk space: ~${FREE_GB} GB free"
+# --- Disk space (warn if < 8 GB) -------------------------------------------
+FREE_KB=$(df -k . 2>/dev/null | awk 'NR==2 {print $4}')
+if [ -n "$FREE_KB" ]; then
+    FREE_GB=$(( FREE_KB / 1024 / 1024 ))
+    if [ "$FREE_GB" -lt 8 ]; then
+        warn "Low disk space: ~${FREE_GB} GB free. Recommended: 8+ GB."
+    else
+        ok "Disk space: ~${FREE_GB} GB free"
+    fi
 fi
 
 if [ "$HAS_ERROR" -ne 0 ]; then
@@ -104,7 +135,12 @@ echo ""
 if [ -d ".venv" ]; then
     warn "Virtual environment already exists — skipping creation"
 else
-    python3 -m venv .venv
+    if ! python3 -m venv .venv; then
+        err "Failed to create virtual environment!"
+        info "Check Python installation and available disk space."
+        info "Linux: ensure python3-venv is installed: sudo apt-get install python3-venv"
+        exit 1
+    fi
     ok "Virtual environment created (.venv)"
 fi
 
@@ -127,7 +163,12 @@ if [ ! -f "requirements.txt" ]; then
 fi
 
 python3 -m pip install --quiet --upgrade pip
-python3 -m pip install --quiet -r requirements.txt
+if ! python3 -m pip install --quiet -r requirements.txt; then
+    err "Failed to install dependencies!"
+    info "Check internet connection, then try:"
+    info "  python3 -m pip install -r requirements.txt"
+    exit 1
+fi
 
 ok "Dependencies installed"
 echo ""
@@ -138,8 +179,8 @@ echo ""
 
 echo "[Step 3/6] Setting up AI models..."
 echo ""
-echo "  Default model: qwen3:8b  (~5.0 GB)"
-echo "  Optional:      qwen2.5-coder:7b  (~4.7 GB extra)"
+echo "  Default model : qwen3:8b         (~5.0 GB)"
+echo "  Optional      : qwen2.5-coder:7b (~4.7 GB extra)"
 echo ""
 
 # Always pull the default model
@@ -150,18 +191,18 @@ else
     if ollama pull qwen3:8b; then
         ok "qwen3:8b downloaded"
     else
-        err "Failed to pull qwen3:8b"
-        info "Try manually:  ollama pull qwen3:8b"
-        info "Check your internet connection and available disk space (~5 GB)."
-        echo ""
+        err "Failed to pull qwen3:8b!"
+        info "Check internet connection and disk space (~5 GB), then try:"
+        info "  ollama pull qwen3:8b"
         exit 1
     fi
 fi
 
-# Ask about the second model
+# Ask about the fallback model
 echo ""
-echo -e "  ${BOLD}Optional:${RESET} Do you also want to download qwen2.5-coder:7b (~4.7 GB)?"
-echo "  This is a code-specialised fallback model. You can always pull it later."
+echo -e "  Optional: Download qwen2.5-coder:7b (~4.7 GB)?"
+echo "  This is a code-specialised fallback model."
+echo "  You can always pull it later with:  ollama pull qwen2.5-coder:7b"
 echo ""
 read -r -p "  Download qwen2.5-coder:7b now? [y/N]: " PULL_FALLBACK
 
@@ -174,11 +215,12 @@ if [[ "$PULL_FALLBACK" =~ ^[Yy]$ ]]; then
             ok "qwen2.5-coder:7b downloaded"
         else
             warn "Failed to pull qwen2.5-coder:7b"
-            info "You can pull it later:  ollama pull qwen2.5-coder:7b"
+            info "Pull it later with:  ollama pull qwen2.5-coder:7b"
         fi
     fi
 else
-    info "Skipping qwen2.5-coder:7b. Pull later with:  ollama pull qwen2.5-coder:7b"
+    info "Skipping qwen2.5-coder:7b."
+    info "Pull later with:  ollama pull qwen2.5-coder:7b"
 fi
 
 echo ""
@@ -192,21 +234,26 @@ echo ""
 
 if [ ! -f "docker/Dockerfile" ]; then
     err "Dockerfile not found at docker/Dockerfile!"
-    info "Make sure you are running this script from the project root (coding_agent/)."
+    info "Make sure you are running setup.sh from the project root (coding_agent/)."
     exit 1
 fi
 
 if docker image inspect agent-sandbox &>/dev/null; then
     ok "Docker image 'agent-sandbox' already exists"
 else
-    info "Building agent-sandbox image (first time may take ~1–2 min)..."
+    info "Building agent-sandbox image (first time may take ~1-2 min)..."
     if docker build -t agent-sandbox -f docker/Dockerfile . --quiet; then
         ok "Docker image built successfully"
     else
-        err "Docker build failed"
-        info "Try:  docker system prune -a  then run setup.sh again"
-        info "Or build manually:  docker build -t agent-sandbox -f docker/Dockerfile ."
-        exit 1
+        warn "Quiet build failed — retrying with verbose output..."
+        if docker build -t agent-sandbox -f docker/Dockerfile .; then
+            ok "Docker image built successfully"
+        else
+            err "Docker build failed!"
+            info "Try:  docker system prune -a  then run setup.sh again."
+            info "Or build manually:  docker build -t agent-sandbox -f docker/Dockerfile ."
+            exit 1
+        fi
     fi
 fi
 
@@ -240,6 +287,7 @@ if [ -f "pre_check.py" ]; then
     echo ""
 else
     warn "pre_check.py not found — skipping verification"
+    echo ""
 fi
 
 # ============================================================================
@@ -252,18 +300,21 @@ echo "======================================================================"
 echo ""
 echo "  Next steps:"
 echo ""
-echo "  1. Generate code:"
-echo "     python3 ESIB_AiCodingAgent.py --generate \"Create a simple calculator\""
+echo "  1. Activate the virtual environment:"
+echo "       source .venv/bin/activate"
+echo "     Or use the convenience launcher:"
+echo "       chmod +x run.sh && ./run.sh"
 echo ""
-echo "  2. Debug a script:"
-echo "     python3 ESIB_AiCodingAgent.py --fix demos/03_broken_script.py"
+echo "  2. Then generate code:"
+echo "       python3 ESIB_AiCodingAgent.py --generate \"Create a simple calculator\""
 echo ""
-echo "  3. Run the demo:"
-echo "     python3 ESIB_AiCodingAgent.py --demo"
+echo "  3. Or debug a script:"
+echo "       python3 ESIB_AiCodingAgent.py --fix demos/03_broken_script.py"
 echo ""
-echo "  4. Get help:"
-echo "     python3 ESIB_AiCodingAgent.py --help"
+echo "  4. Or run the demo:"
+echo "       python3 ESIB_AiCodingAgent.py --demo"
 echo ""
+echo "  For help:  python3 ESIB_AiCodingAgent.py --help"
 echo "  For issues: see TROUBLESHOOTING.md"
 echo ""
 echo "======================================================================"
