@@ -35,22 +35,50 @@ This guide helps resolve common issues with the ESIB AI Coding Agent.
 
 ---
 
-### "Python not found" or "Python version mismatch"
+### "Python not found" or Python version is too old
 
 **Symptom:**
 ```
-Python 3.10 or higher required
+[X] Python 3.10 or higher not found!
+```
+or:
+```
+TypeError: unsupported operand type(s) for |: 'type' and 'NoneType'
 ```
 
-**Solution:**
-1. Install Python 3.10+ from [python.org](https://python.org)
-2. Ensure Python is in PATH:
-   ```bash
-   python3 --version    # Linux/macOS — should show 3.10+
-   python --version     # Windows — should show 3.10+
-   ```
-3. **Windows:** During installation, check "Add Python to PATH"
-4. **Linux:** Install with `sudo apt-get install python3 python3-venv python3-pip`
+The second error means Python 3.9 or older was used to create the venv. The `str | None` syntax used in the project requires 3.10+.
+
+**Check your version:**
+```bash
+python3 --version    # Linux/macOS
+python --version     # Windows
+```
+
+**macOS — install Python 3.10:**
+```bash
+brew install python@3.10
+python3.10 --version   # verify
+```
+Then delete the old venv and re-run setup:
+```bash
+deactivate
+rm -rf .venv
+./setup.sh
+```
+
+**Linux — install Python 3.10:**
+```bash
+sudo apt-get install python3.10 python3.10-venv python3.10-pip
+python3.10 --version   # verify
+```
+Then delete the old venv and re-run setup:
+```bash
+deactivate
+rm -rf .venv
+./setup.sh
+```
+
+**Windows:** Download Python 3.10+ from [python.org/downloads](https://python.org/downloads). During installation, check **"Add Python to PATH"**. Restart your terminal, then re-run `setup.bat`.
 
 ---
 

@@ -10,17 +10,29 @@ Get the ESIB AI Coding Agent running in under 10 minutes.
 
 ### 1. Python 3.10+
 
+> **Python 3.10 or higher is required.** The project uses the `str | None` union type-hint syntax introduced in 3.10. Older versions (3.8, 3.9) will crash on startup.
+
 ```bash
 python3 --version    # Linux/macOS
 python --version     # Windows
 ```
 **Expected:** `Python 3.10.x` or higher
 
-**If not installed:**
-- Download from [python.org](https://python.org)
-- **Windows:** Check "Add Python to PATH" during installation
-- **Linux:** `sudo apt-get install python3 python3-venv python3-pip`
-- Restart terminal after installation
+**If not installed or version is too old:**
+
+**macOS:**
+```bash
+brew install python@3.10
+python3.10 --version   # verify
+```
+
+**Linux:**
+```bash
+sudo apt-get install python3.10 python3.10-venv python3.10-pip
+python3.10 --version   # verify
+```
+
+**Windows:** Download Python 3.10+ from [python.org/downloads](https://python.org/downloads). During installation, check **"Add Python to PATH"**. Restart your terminal after installation.
 
 ---
 
@@ -82,17 +94,11 @@ ollama serve &
 git clone https://github.com/Joedaoud128/FYP.git
 cd FYP\coding_agent
 
-:: 2. Run setup (5-10 min — downloads ~5 GB minimum)
+:: 2. Run setup — installs everything and opens an activated shell automatically
 .\setup.bat
-
-:: 3. Activate the virtual environment (opens a persistent CMD shell)
-run.bat
-
-:: 4. Verify installation (run inside the activated shell)
-python pre_check.py
 ```
 
-> After `run.bat`, all subsequent commands go inside the opened window.
+> `setup.bat` activates the virtual environment and launches `run.bat` automatically at the end. Once setup finishes, you are already inside an active shell — run `python pre_check.py` straight away.
 
 ### Linux / macOS
 
@@ -104,17 +110,11 @@ cd FYP/coding_agent
 # 2. Make scripts executable
 chmod +x setup.sh run.sh
 
-# 3. Run setup (5-10 min — downloads ~5 GB minimum)
+# 3. Run setup — installs everything and opens an activated shell automatically
 ./setup.sh
-
-# 4. Activate the virtual environment (opens a persistent shell)
-./run.sh
-
-# 5. Verify installation (run inside the activated shell)
-python3 pre_check.py
 ```
 
-> After `./run.sh`, all subsequent commands go inside the opened shell. Keep it open for your entire session.
+> `setup.sh` activates the virtual environment and launches `./run.sh` automatically at the end. Once setup finishes, you are already inside an active shell — run `python3 pre_check.py` straight away.
 
 ---
 
@@ -154,9 +154,9 @@ If you only plan to use `qwen3:8b`, skip this — no extra download needed.
 
 ---
 
-## Activating the Virtual Environment
+## Starting a New Session
 
-Both platforms work the same way: run the activation script once at the start of each session, then type all commands inside the opened shell.
+After first-time setup, every time you open a new terminal you need to re-activate the venv before running any commands.
 
 ### Windows
 

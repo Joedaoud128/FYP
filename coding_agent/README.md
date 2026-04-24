@@ -61,6 +61,7 @@ git clone https://github.com/Joedaoud128/FYP.git
 cd FYP/coding_agent
 chmod +x setup.sh run.sh
 ./setup.sh
+./run.sh
 python3 pre_check.py     # verify everything is ready
 ```
 

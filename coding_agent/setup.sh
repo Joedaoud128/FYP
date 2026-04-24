@@ -34,19 +34,39 @@ echo ""
 
 HAS_ERROR=0
 
-# --- Python ----------------------------------------------------------------
-if ! command -v python3 &>/dev/null; then
-    err "Python 3 not found!"
+# --- Python (must be 3.10+) ------------------------------------------------
+PYTHON_CMD=""
+
+# Find a Python 3.10+ interpreter: prefer python3.10, then python3, then python
+for cmd in python3.10 python3.11 python3.12 python3 python; do
+    if command -v "$cmd" &>/dev/null; then
+        _ver=$("$cmd" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null)
+        _major=$(echo "$_ver" | cut -d. -f1)
+        _minor=$(echo "$_ver" | cut -d. -f2)
+        if [ "$_major" -eq 3 ] && [ "$_minor" -ge 10 ] 2>/dev/null; then
+            PYTHON_CMD="$cmd"
+            PY_VERSION=$("$cmd" --version 2>&1 | awk '{print $2}')
+            ok "Python $PY_VERSION found ($cmd)"
+            break
+        fi
+    fi
+done
+
+if [ -z "$PYTHON_CMD" ]; then
+    err "Python 3.10 or higher not found!"
     echo ""
     info "SOLUTION:"
-    info "  Linux:  sudo apt-get install python3 python3-venv python3-pip"
+    info "  Python 3.10+ is required (current code uses 3.10 type-hint syntax)."
+    info ""
     info "  macOS:  brew install python@3.10"
-    info "  Or download from: https://python.org"
+    info "          Then verify:  python3.10 --version"
+    info ""
+    info "  Linux:  sudo apt-get install python3.10 python3.10-venv python3.10-pip"
+    info "          Then verify:  python3.10 --version"
+    info ""
+    info "  Or download from: https://python.org/downloads"
     echo ""
     HAS_ERROR=1
-else
-    PY_VERSION=$(python3 --version 2>&1 | awk '{print $2}')
-    ok "Python $PY_VERSION found"
 fi
 
 # --- Docker installed -------------------------------------------------------
@@ -135,13 +155,14 @@ echo ""
 if [ -d ".venv" ]; then
     warn "Virtual environment already exists — skipping creation"
 else
-    if ! python3 -m venv .venv; then
+    if ! "$PYTHON_CMD" -m venv .venv; then
         err "Failed to create virtual environment!"
         info "Check Python installation and available disk space."
-        info "Linux: ensure python3-venv is installed: sudo apt-get install python3-venv"
+        info "Linux: ensure python3.10-venv is installed:"
+        info "  sudo apt-get install python3.10-venv"
         exit 1
     fi
-    ok "Virtual environment created (.venv)"
+    ok "Virtual environment created (.venv) using $PYTHON_CMD"
 fi
 
 # Activate for the rest of this script
@@ -200,7 +221,7 @@ fi
 
 # Ask about the fallback model
 echo ""
-echo -e "  Optional: Download qwen2.5-coder:7b (~4.7 GB)?"
+echo "  Optional: Download qwen2.5-coder:7b (~4.7 GB)?"
 echo "  This is a code-specialised fallback model."
 echo "  You can always pull it later with:  ollama pull qwen2.5-coder:7b"
 echo ""
@@ -291,31 +312,26 @@ else
 fi
 
 # ============================================================================
-#  Done
+#  Done — launch run.sh to activate venv in the user's shell
 # ============================================================================
 
 echo "======================================================================"
 echo -e "  ${GREEN}${BOLD}SETUP COMPLETE!${RESET}"
 echo "======================================================================"
 echo ""
-echo "  Next steps:"
+echo "  Launching virtual environment shell..."
 echo ""
-echo "  1. Activate the virtual environment:"
-echo "       source .venv/bin/activate"
-echo "     Or use the convenience launcher:"
-echo "       chmod +x run.sh && ./run.sh"
+echo "  Once inside, you can run:"
+echo "    python3 ESIB_AiCodingAgent.py --generate \"Create a simple calculator\""
+echo "    python3 ESIB_AiCodingAgent.py --fix demos/03_broken_script.py"
+echo "    python3 ESIB_AiCodingAgent.py --demo"
+echo "    python3 ESIB_AiCodingAgent.py --help"
 echo ""
-echo "  2. Then generate code:"
-echo "       python3 ESIB_AiCodingAgent.py --generate \"Create a simple calculator\""
-echo ""
-echo "  3. Or debug a script:"
-echo "       python3 ESIB_AiCodingAgent.py --fix demos/03_broken_script.py"
-echo ""
-echo "  4. Or run the demo:"
-echo "       python3 ESIB_AiCodingAgent.py --demo"
-echo ""
-echo "  For help:  python3 ESIB_AiCodingAgent.py --help"
 echo "  For issues: see TROUBLESHOOTING.md"
 echo ""
 echo "======================================================================"
 echo ""
+
+# Launch run.sh so the user lands directly in an activated shell.
+# exec replaces this process — the venv stays active with no manual step needed.
+exec "$(dirname "$0")/run.sh"

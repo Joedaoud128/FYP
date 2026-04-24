@@ -19,19 +19,52 @@ REM ========================================================================
 echo [Step 0/6] Running pre-flight checks...
 echo.
 
-REM Python
+REM Python — must be 3.10 or higher
 python --version >nul 2>&1
 if errorlevel 1 (
     echo [X] Python not found!
     echo.
     echo     SOLUTION:
-    echo     1. Install Python 3.10+ from: https://python.org
+    echo     1. Install Python 3.10+ from: https://python.org/downloads
     echo     2. During installation, check "Add Python to PATH"
     echo     3. Restart this terminal and run setup.bat again
     echo.
     set HAS_ERROR=1
 ) else (
-    for /f "tokens=2" %%v in ('python --version 2^>^&1') do echo [OK] Python %%v found
+    REM Extract version string e.g. "3.9.7"
+    for /f "tokens=2" %%v in ('python --version 2^>^&1') do set PY_VER=%%v
+
+    REM Extract major and minor version numbers
+    for /f "tokens=1,2 delims=." %%a in ("!PY_VER!") do (
+        set PY_MAJOR=%%a
+        set PY_MINOR=%%b
+    )
+
+    REM Check major == 3 and minor >= 10
+    if !PY_MAJOR! neq 3 (
+        echo [X] Python !PY_VER! found but Python 3.10+ is required!
+        echo.
+        echo     SOLUTION:
+        echo     1. Install Python 3.10+ from: https://python.org/downloads
+        echo     2. During installation, check "Add Python to PATH"
+        echo     3. Restart this terminal and run setup.bat again
+        echo.
+        set HAS_ERROR=1
+    ) else if !PY_MINOR! LSS 10 (
+        echo [X] Python !PY_VER! found but Python 3.10+ is required!
+        echo.
+        echo     The project uses Python 3.10 type-hint syntax ^(str ^| None^)
+        echo     which is not supported in older versions.
+        echo.
+        echo     SOLUTION:
+        echo     1. Install Python 3.10+ from: https://python.org/downloads
+        echo     2. During installation, check "Add Python to PATH"
+        echo     3. Restart this terminal and run setup.bat again
+        echo.
+        set HAS_ERROR=1
+    ) else (
+        echo [OK] Python !PY_VER! found
+    )
 )
 
 REM Docker installed
@@ -289,30 +322,25 @@ if exist "pre_check.py" (
 )
 
 REM ========================================================================
-REM  Done
+REM  Done — launch run.bat to keep venv active
 REM ========================================================================
 
 echo ======================================================================
 echo   SETUP COMPLETE!
 echo ======================================================================
 echo.
-echo   Next steps:
+echo   Launching virtual environment shell...
 echo.
-echo   1. Activate the virtual environment:
-echo        run.bat
+echo   Once inside, you can run:
+echo     python ESIB_AiCodingAgent.py --generate "Create a simple calculator"
+echo     python ESIB_AiCodingAgent.py --fix demos\03_broken_script.py
+echo     python ESIB_AiCodingAgent.py --demo
+echo     python ESIB_AiCodingAgent.py --help
 echo.
-echo   2. Then generate code:
-echo        python ESIB_AiCodingAgent.py --generate "Create a simple calculator"
-echo.
-echo   3. Or debug a script:
-echo        python ESIB_AiCodingAgent.py --fix demos\03_broken_script.py
-echo.
-echo   4. Or run the demo:
-echo        python ESIB_AiCodingAgent.py --demo
-echo.
-echo   For help:  python ESIB_AiCodingAgent.py --help
 echo   For issues: see TROUBLESHOOTING.md
 echo.
 echo ======================================================================
 echo.
-pause
+
+REM Launch run.bat so the user lands in an activated shell automatically.
+call "%SCRIPT_DIR%run.bat"
