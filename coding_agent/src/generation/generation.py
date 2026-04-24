@@ -27,6 +27,7 @@ Usage:
 """
 
 import ast
+import getpass
 import json
 import os
 import platform
@@ -872,7 +873,7 @@ class ProactiveCodeGenerator:
         run_start = perf_counter()
         now_utc = datetime.now(timezone.utc)
         run_stats = {
-            "run_id": now_utc.strftime("%Y%m%dT%H%M%S.%fZ"),
+            "run_id": getpass.getuser(),
             "timestamp_utc": now_utc.isoformat(),
             "prompt_chars": len(user_prompt or ""),
             "prompt_preview": self._format_prompt_preview(user_prompt or ""),

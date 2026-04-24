@@ -297,11 +297,11 @@ REM ========================================================================
 echo [Step 5/6] Creating required directories...
 echo.
 
-if not exist "logs"                          mkdir logs
-if not exist "demos"                         mkdir demos
-if not exist "src\generation\generated_code" mkdir src\generation\generated_code
-if not exist "memory_store"                  mkdir memory_store
-if not exist "docs"                          mkdir docs
+if not exist "logs"                                mkdir logs
+if not exist "demos"                               mkdir demos
+if not exist "src\generation\generated_code"       mkdir src\generation\generated_code
+if not exist "src\orchestrator\memory_store"       mkdir src\orchestrator\memory_store
+if not exist "docs"                                mkdir docs
 
 echo [OK] Directories ready
 echo.

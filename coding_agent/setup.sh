@@ -290,7 +290,7 @@ echo ""
 mkdir -p logs
 mkdir -p demos
 mkdir -p src/generation/generated_code
-mkdir -p memory_store
+mkdir -p src/orchestrator/memory_store
 mkdir -p docs
 
 ok "Directories ready"
