@@ -78,12 +78,11 @@ The setup script will:
 - ✅ Verify Docker and Ollama are running
 - ✅ Create a Python virtual environment (`.venv`)
 - ✅ Install Python dependencies
-- ✅ Pull the default AI model — `qwen3:8b` (~5 GB)
-- ✅ **Ask whether to also download `qwen2.5-coder:7b`** (~4.7 GB extra — optional)
+- ✅ Manage AI models intelligently — detects what is already installed and only prompts for what is missing
 - ✅ Build the Docker sandbox image
 - ✅ Create necessary directories
 
-> Answer **N** at the model prompt to skip the second model. You can always pull it later with `ollama pull qwen2.5-coder:7b`.
+> **Model prompts during setup:** If only one model is present, setup asks if you want the other. If neither is present, it pulls `qwen3:8b` automatically, then asks about `qwen2.5-coder:7b`. Answer **N** to skip any optional download — you can always pull later.
 
 ### Activating the Virtual Environment
 

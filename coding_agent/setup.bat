@@ -209,37 +209,34 @@ echo   Default model : qwen3:8b         (~5.0 GB^)
 echo   Optional      : qwen2.5-coder:7b (~4.7 GB extra^)
 echo.
 
-REM Always pull the default model
-curl.exe -s http://localhost:11434/api/tags | find "qwen3:8b" >nul 2>&1
-if not errorlevel 1 (
+REM Detect which models are already present
+set HAS_QWEN3=0
+set HAS_CODER=0
+
+ollama list 2>nul | find "qwen3:8b" >nul 2>&1
+if not errorlevel 1 set HAS_QWEN3=1
+
+ollama list 2>nul | find "qwen2.5-coder:7b" >nul 2>&1
+if not errorlevel 1 set HAS_CODER=1
+
+REM ---- Both already present -----------------------------------------------
+if !HAS_QWEN3!==1 if !HAS_CODER!==1 (
     echo [OK] qwen3:8b already present
-) else (
-    echo       Pulling qwen3:8b (~5.0 GB^) -- this may take several minutes...
-    ollama pull qwen3:8b
-    if errorlevel 1 (
-        echo [X] Failed to pull qwen3:8b!
-        echo     Check internet connection and disk space (~5 GB^), then try:
-        echo       ollama pull qwen3:8b
-        pause
-        exit /b 1
-    )
-    echo [OK] qwen3:8b downloaded
+    echo [OK] qwen2.5-coder:7b already present
+    goto :models_done
 )
 
-REM Ask about the fallback model
-echo.
-echo   Optional: Download qwen2.5-coder:7b ^(~4.7 GB^)?
-echo   This is a code-specialised fallback model.
-echo   You can always pull it later with:  ollama pull qwen2.5-coder:7b
-echo.
-set /p PULL_FALLBACK="  Download qwen2.5-coder:7b now? [y/N]: "
-
-if /i "!PULL_FALLBACK!"=="y" (
-    curl.exe -s http://localhost:11434/api/tags | find "qwen2.5-coder:7b" >nul 2>&1
-    if not errorlevel 1 (
-        echo [OK] qwen2.5-coder:7b already present
-    ) else (
-        echo       Pulling qwen2.5-coder:7b (~4.7 GB^)...
+REM ---- Only qwen3:8b is present — ask about the coder model ---------------
+if !HAS_QWEN3!==1 if !HAS_CODER!==0 (
+    echo [OK] qwen3:8b already present
+    echo.
+    echo   Optional: Download qwen2.5-coder:7b ^(~4.7 GB^)?
+    echo   This is a code-specialised companion model.
+    echo   You can always pull it later with:  ollama pull qwen2.5-coder:7b
+    echo.
+    set /p PULL_CODER="  Download qwen2.5-coder:7b now? [y/N]: "
+    if /i "!PULL_CODER!"=="y" (
+        echo       Pulling qwen2.5-coder:7b ~(4.7 GB^)...
         ollama pull qwen2.5-coder:7b
         if errorlevel 1 (
             echo [!]  Failed to pull qwen2.5-coder:7b
@@ -247,11 +244,71 @@ if /i "!PULL_FALLBACK!"=="y" (
         ) else (
             echo [OK] qwen2.5-coder:7b downloaded
         )
+    ) else (
+        echo       Skipping qwen2.5-coder:7b.
+        echo       Pull later with:  ollama pull qwen2.5-coder:7b
+    )
+    goto :models_done
+)
+
+REM ---- Only qwen2.5-coder is present — ask about qwen3 -------------------
+if !HAS_QWEN3!==0 if !HAS_CODER!==1 (
+    echo [OK] qwen2.5-coder:7b already present
+    echo.
+    echo   Optional: Download qwen3:8b ^(~5.0 GB^)?
+    echo   This is the default/recommended model for this agent.
+    echo   You can always pull it later with:  ollama pull qwen3:8b
+    echo.
+    set /p PULL_QWEN3="  Download qwen3:8b now? [y/N]: "
+    if /i "!PULL_QWEN3!"=="y" (
+        echo       Pulling qwen3:8b ^(~5.0 GB^)...
+        ollama pull qwen3:8b
+        if errorlevel 1 (
+            echo [!]  Failed to pull qwen3:8b
+            echo      Pull it later with:  ollama pull qwen3:8b
+        ) else (
+            echo [OK] qwen3:8b downloaded
+        )
+    ) else (
+        echo       Skipping qwen3:8b.
+        echo       To use the agent you will need to pass:  --model qwen2.5-coder:7b
+        echo       Pull qwen3:8b later with:  ollama pull qwen3:8b
+    )
+    goto :models_done
+)
+
+REM ---- Neither model present — pull qwen3 first, then ask about coder ----
+echo       No models found. Pulling qwen3:8b ^(~5.0 GB^) -- this may take several minutes...
+ollama pull qwen3:8b
+if errorlevel 1 (
+    echo [X] Failed to pull qwen3:8b!
+    echo     Check internet connection and disk space ^(~5 GB^), then try:
+    echo       ollama pull qwen3:8b
+    pause
+    exit /b 1
+)
+echo [OK] qwen3:8b downloaded
+echo.
+echo   Optional: Also download qwen2.5-coder:7b ^(~4.7 GB^)?
+echo   This is a code-specialised companion model.
+echo   You can always pull it later with:  ollama pull qwen2.5-coder:7b
+echo.
+set /p PULL_CODER2="  Download qwen2.5-coder:7b now? [y/N]: "
+if /i "!PULL_CODER2!"=="y" (
+    echo       Pulling qwen2.5-coder:7b ^(~4.7 GB^)...
+    ollama pull qwen2.5-coder:7b
+    if errorlevel 1 (
+        echo [!]  Failed to pull qwen2.5-coder:7b
+        echo      Pull it later with:  ollama pull qwen2.5-coder:7b
+    ) else (
+        echo [OK] qwen2.5-coder:7b downloaded
     )
 ) else (
     echo       Skipping qwen2.5-coder:7b.
     echo       Pull later with:  ollama pull qwen2.5-coder:7b
 )
+
+:models_done
 
 echo.
 

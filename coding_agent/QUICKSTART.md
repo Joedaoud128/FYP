@@ -142,21 +142,27 @@ python3 pre_check.py
 
 1. ✅ Creates Python virtual environment (`.venv`)
 2. ✅ Installs Python dependencies (`pyyaml`, etc.)
-3. ✅ Pulls the default AI model — `qwen3:8b` (~5.0 GB)
-4. ✅ **Asks whether you want to also download `qwen2.5-coder:7b`** (~4.7 GB extra)
-5. ✅ Builds Docker sandbox image (`agent-sandbox`)
-6. ✅ Creates required directories (`logs/`, `demos/`, etc.)
-7. ✅ Verifies system health
+3. ✅ Handles AI models intelligently based on what is already installed:
+   - **Both models present** → reports OK, no download needed
+   - **Only `qwen3:8b` present** → asks if you also want `qwen2.5-coder:7b` (~4.7 GB)
+   - **Only `qwen2.5-coder:7b` present** → asks if you also want `qwen3:8b` (~5.0 GB)
+   - **Neither present** → pulls `qwen3:8b` first, then asks about `qwen2.5-coder:7b`
+4. ✅ Builds Docker sandbox image (`agent-sandbox`)
+5. ✅ Creates required directories (`logs/`, `demos/`, etc.)
+6. ✅ Verifies system health
 
 **Total time:** 5–10 minutes | **Minimum download:** ~5 GB (default model only)
 
 ### Do you need the second model?
 
-During setup you will be prompted:
+During setup you will be prompted based on what is already installed. For example, if you have neither model:
 
 ```
-Optional: Download qwen2.5-coder:7b (~4.7 GB)?
-Download qwen2.5-coder:7b now? [y/N]:
+No models found. Pulling qwen3:8b (~5.0 GB) — this may take several minutes...
+[OK] qwen3:8b downloaded
+
+  Optional: Also download qwen2.5-coder:7b (~4.7 GB)?
+  Download qwen2.5-coder:7b now? [y/N]:
 ```
 
 Answer **N** (or press Enter) to skip it. Pull it later if you need it:

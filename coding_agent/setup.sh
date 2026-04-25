@@ -204,44 +204,92 @@ echo "  Default model : qwen3:8b         (~5.0 GB)"
 echo "  Optional      : qwen2.5-coder:7b (~4.7 GB extra)"
 echo ""
 
-# Always pull the default model
-if ollama list 2>/dev/null | grep -q "qwen3:8b"; then
-    ok "qwen3:8b already present"
-else
-    info "Pulling qwen3:8b (~5.0 GB) — this may take several minutes..."
+# Detect which models are already present
+HAS_QWEN3=0
+HAS_CODER=0
+ollama list 2>/dev/null | grep -q "qwen3:8b"        && HAS_QWEN3=1
+ollama list 2>/dev/null | grep -q "qwen2.5-coder:7b" && HAS_CODER=1
+
+_pull_coder() {
+    info "Pulling qwen2.5-coder:7b (~4.7 GB)..."
+    if ollama pull qwen2.5-coder:7b; then
+        ok "qwen2.5-coder:7b downloaded"
+    else
+        warn "Failed to pull qwen2.5-coder:7b"
+        info "Pull it later with:  ollama pull qwen2.5-coder:7b"
+    fi
+}
+
+_pull_qwen3() {
+    info "Pulling qwen3:8b (~5.0 GB)..."
     if ollama pull qwen3:8b; then
         ok "qwen3:8b downloaded"
     else
+        warn "Failed to pull qwen3:8b"
+        info "Pull it later with:  ollama pull qwen3:8b"
+    fi
+}
+
+if [ "$HAS_QWEN3" -eq 1 ] && [ "$HAS_CODER" -eq 1 ]; then
+    # ── Both present ─────────────────────────────────────────────────────────
+    ok "qwen3:8b already present"
+    ok "qwen2.5-coder:7b already present"
+
+elif [ "$HAS_QWEN3" -eq 1 ] && [ "$HAS_CODER" -eq 0 ]; then
+    # ── Only qwen3 present — offer the coder model ────────────────────────────
+    ok "qwen3:8b already present"
+    echo ""
+    echo "  Optional: Download qwen2.5-coder:7b (~4.7 GB)?"
+    echo "  This is a code-specialised companion model."
+    echo "  You can always pull it later with:  ollama pull qwen2.5-coder:7b"
+    echo ""
+    read -r -p "  Download qwen2.5-coder:7b now? [y/N]: " PULL_CODER
+    if [[ "$PULL_CODER" =~ ^[Yy]$ ]]; then
+        _pull_coder
+    else
+        info "Skipping qwen2.5-coder:7b."
+        info "Pull later with:  ollama pull qwen2.5-coder:7b"
+    fi
+
+elif [ "$HAS_QWEN3" -eq 0 ] && [ "$HAS_CODER" -eq 1 ]; then
+    # ── Only coder present — offer qwen3 ─────────────────────────────────────
+    ok "qwen2.5-coder:7b already present"
+    echo ""
+    echo "  Optional: Download qwen3:8b (~5.0 GB)?"
+    echo "  This is the default/recommended model for this agent."
+    echo "  You can always pull it later with:  ollama pull qwen3:8b"
+    echo ""
+    read -r -p "  Download qwen3:8b now? [y/N]: " PULL_QWEN3
+    if [[ "$PULL_QWEN3" =~ ^[Yy]$ ]]; then
+        _pull_qwen3
+    else
+        info "Skipping qwen3:8b."
+        info "To use the agent you will need to pass:  --model qwen2.5-coder:7b"
+        info "Pull qwen3:8b later with:  ollama pull qwen3:8b"
+    fi
+
+else
+    # ── Neither present — pull qwen3 first, then offer the coder model ───────
+    info "No models found. Pulling qwen3:8b (~5.0 GB) — this may take several minutes..."
+    if ! ollama pull qwen3:8b; then
         err "Failed to pull qwen3:8b!"
         info "Check internet connection and disk space (~5 GB), then try:"
         info "  ollama pull qwen3:8b"
         exit 1
     fi
-fi
-
-# Ask about the fallback model
-echo ""
-echo "  Optional: Download qwen2.5-coder:7b (~4.7 GB)?"
-echo "  This is a code-specialised fallback model."
-echo "  You can always pull it later with:  ollama pull qwen2.5-coder:7b"
-echo ""
-read -r -p "  Download qwen2.5-coder:7b now? [y/N]: " PULL_FALLBACK
-
-if [[ "$PULL_FALLBACK" =~ ^[Yy]$ ]]; then
-    if ollama list 2>/dev/null | grep -q "qwen2.5-coder:7b"; then
-        ok "qwen2.5-coder:7b already present"
+    ok "qwen3:8b downloaded"
+    echo ""
+    echo "  Optional: Also download qwen2.5-coder:7b (~4.7 GB)?"
+    echo "  This is a code-specialised companion model."
+    echo "  You can always pull it later with:  ollama pull qwen2.5-coder:7b"
+    echo ""
+    read -r -p "  Download qwen2.5-coder:7b now? [y/N]: " PULL_CODER2
+    if [[ "$PULL_CODER2" =~ ^[Yy]$ ]]; then
+        _pull_coder
     else
-        info "Pulling qwen2.5-coder:7b (~4.7 GB)..."
-        if ollama pull qwen2.5-coder:7b; then
-            ok "qwen2.5-coder:7b downloaded"
-        else
-            warn "Failed to pull qwen2.5-coder:7b"
-            info "Pull it later with:  ollama pull qwen2.5-coder:7b"
-        fi
+        info "Skipping qwen2.5-coder:7b."
+        info "Pull later with:  ollama pull qwen2.5-coder:7b"
     fi
-else
-    info "Skipping qwen2.5-coder:7b."
-    info "Pull later with:  ollama pull qwen2.5-coder:7b"
 fi
 
 echo ""
