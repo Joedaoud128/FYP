@@ -20,12 +20,6 @@ Termination rules (Module 11):
     - 30-minute overall session timeout
 
 Author: Maria (Orchestrator)
-
-CHANGES FOR DEMO INTEGRATION:
-    - Model changed from qwen3:8b to qwen2.5-coder:7b (local Ollama)
-    - Docker is optional — falls back to subprocess execution if unavailable
-    - debugging.py adapter bridges Raymond's SelfCorrectionService
-    - Removed duplicate imports
 """
 
 import os
@@ -648,14 +642,6 @@ class Orchestrator:
         if req_analysis and "libraries" in req_analysis:
             return req_analysis.get("libraries", [])
         return []
-
-    # NOTE: _structure_prompt() (Phase 6 Change 2) was removed because
-    # prepending execution-environment context to the full user_prompt
-    # caused Stage 3's LLM to exit with "cannot run in Docker container".
-    # Execution context is already correctly injected inside generation.py
-    # Stage 6 at the code-generation step — which is the right place for it.
-    # original_prompt (Change 1) is still forwarded through Schema A → B
-    # so the debugger retains the user's raw intent.
 
     def _validate_llm_command(
         self, command: str, working_dir: str, caller: str = "generation"

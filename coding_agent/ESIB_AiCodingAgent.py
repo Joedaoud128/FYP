@@ -448,7 +448,7 @@ Examples:
         "--model", "-m",
         choices=["qwen2.5-coder:7b", "qwen3:8b"],
         default=None,
-        help="LLM model to use for code generation and debugging. Default: qwen2.5-coder:7b",
+        help="LLM model to use for code generation and debugging. Default: qwen3:8b (fallback: qwen2.5-coder:7b).",
     )
     parser.add_argument(
         "--verbose", "-v",
@@ -507,7 +507,7 @@ def main() -> int:
             os.environ["OLLAMA_MODEL"] = args.model
             logger.info("Model      : %s", args.model)
         else:
-            logger.info("Model      : %s (default)", os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:7b"))
+            logger.info("Model      : %s (default)", os.environ.get("OLLAMA_MODEL", "qwen3:8b"))
         
         if os.environ.get("RUNNING_IN_DOCKER"):
             logger.info("Environment: Docker container")

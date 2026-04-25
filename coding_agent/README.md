@@ -87,38 +87,58 @@ The setup script will:
 
 ### Activating the Virtual Environment
 
-Both platforms work the same way: run the activation script at the start of each session, then type all commands inside the opened shell.
+Both platforms work the same way: run the activation script at the start of each session, then run `pre_check.py` to confirm everything is healthy before starting work.
 
 **Linux/macOS:**
 ```bash
+# 1. Activate the virtual environment
 ./run.sh
+
+# 2. Verify the system is healthy
+python3 pre_check.py
 ```
 
 **Windows:**
 ```cmd
+:: 1. Activate the virtual environment
 run.bat
+
+:: 2. Verify the system is healthy
+python pre_check.py
 ```
 
-> `run.sh` and `run.bat` activate the `.venv` and open a persistent shell. Run them after setup and at the start of every new session — all Python commands go inside that window.
+> `run.sh` and `run.bat` activate the `.venv` and open a persistent shell. Run them after setup and at the start of every new session. Always follow with `pre_check.py` — it confirms Docker, Ollama, and the model are all ready before you begin.
 
 ### Quick Demo
 
 ```bash
-python3 ESIB_AiCodingAgent.py --demo       # Linux/macOS (inside ./run.sh shell)
-python ESIB_AiCodingAgent.py --demo        # Windows (inside run.bat shell)
+# Linux/macOS
+python3 ESIB_AiCodingAgent.py --demo
+
+# Windows
+python ESIB_AiCodingAgent.py --demo
 ```
 
 ### Basic Usage
 
 **Generate code:**
 ```bash
-python3 ESIB_AiCodingAgent.py --generate "Write a web scraper for Hacker News"
+# Linux/macOS
+python3 ESIB_AiCodingAgent.py --generate "Write a script that fetches and displays the latest Microsoft stock price"
 python3 ESIB_AiCodingAgent.py --generate "Write a CSV parser"
+
+# Windows
+python ESIB_AiCodingAgent.py --generate "Write a script that fetches and displays the latest Microsoft stock price"
+python ESIB_AiCodingAgent.py --generate "Write a CSV parser"
 ```
 
 **Debug code:**
 ```bash
+# Linux/macOS
 python3 ESIB_AiCodingAgent.py --fix path/to/broken_script.py
+
+# Windows
+python ESIB_AiCodingAgent.py --fix path\to\broken_script.py
 ```
 
 ---
@@ -133,20 +153,34 @@ The system defaults to `qwen3:8b`. Use `--model` to switch:
 | `qwen2.5-coder:7b` | ~4.7 GB | Optional fallback — pull manually if needed |
 
 ```bash
-# Use qwen3:8b explicitly
+# Linux/macOS — use qwen3:8b explicitly
 python3 ESIB_AiCodingAgent.py --generate "Build a REST API" --model qwen3:8b
 
-# Use qwen2.5-coder (e.g. if qwen3 is unavailable)
+# Linux/macOS — use qwen2.5-coder (e.g. if qwen3 is unavailable)
 python3 ESIB_AiCodingAgent.py --generate "Build a REST API" --model qwen2.5-coder:7b
+
+# Windows — use qwen3:8b explicitly
+python ESIB_AiCodingAgent.py --generate "Build a REST API" --model qwen3:8b
+
+# Windows — use qwen2.5-coder (e.g. if qwen3 is unavailable)
+python ESIB_AiCodingAgent.py --generate "Build a REST API" --model qwen2.5-coder:7b
 ```
 
 > **If `qwen3:8b` is not available on your machine**, always add `--model qwen2.5-coder:7b` so the agent uses the correct model. Check available models with `ollama list`.
 
 **Set a session default via environment variable:**
 ```bash
-export OLLAMA_MODEL=qwen2.5-coder:7b      # Linux/macOS
-set OLLAMA_MODEL=qwen2.5-coder:7b         # Windows CMD
-$env:OLLAMA_MODEL="qwen2.5-coder:7b"      # Windows PowerShell
+# Linux/macOS
+export OLLAMA_MODEL=qwen3:8b              # use the default model
+export OLLAMA_MODEL=qwen2.5-coder:7b      # or the fallback model
+
+# Windows CMD
+set OLLAMA_MODEL=qwen3:8b
+set OLLAMA_MODEL=qwen2.5-coder:7b
+
+# Windows PowerShell
+$env:OLLAMA_MODEL="qwen3:8b"
+$env:OLLAMA_MODEL="qwen2.5-coder:7b"
 ```
 
 ---
@@ -245,24 +279,39 @@ coding_agent/
 ### Generate code
 
 ```bash
+# Linux/macOS
 python3 ESIB_AiCodingAgent.py --generate "Create a web scraper that extracts the top 10 Hacker News stories with titles, URLs, and scores. Save to JSON."
 python3 ESIB_AiCodingAgent.py --generate "Read a CSV file with sales data and create a bar chart of revenue by product. Use pandas and matplotlib."
+
+# Windows
+python ESIB_AiCodingAgent.py --generate "Create a web scraper that extracts the top 10 Hacker News stories with titles, URLs, and scores. Save to JSON."
+python ESIB_AiCodingAgent.py --generate "Read a CSV file with sales data and create a bar chart of revenue by product. Use pandas and matplotlib."
 ```
 
 ### Debug a broken script
 
 ```bash
+# Linux/macOS
 python3 ESIB_AiCodingAgent.py --fix demos/03_broken_script.py
+
+# Windows
+python ESIB_AiCodingAgent.py --fix demos\03_broken_script.py
 ```
 
 ### Use a specific model
 
 ```bash
-# Use qwen2.5-coder (e.g. if qwen3 is unavailable)
+# Linux/macOS — use qwen2.5-coder (e.g. if qwen3 is unavailable)
 python3 ESIB_AiCodingAgent.py --generate "Build a REST API client" --model qwen2.5-coder:7b
 
-# Use qwen3 for complex tasks
+# Linux/macOS — use qwen3 for complex tasks
 python3 ESIB_AiCodingAgent.py --generate "Build a REST API client" --model qwen3:8b
+
+# Windows — use qwen2.5-coder (e.g. if qwen3 is unavailable)
+python ESIB_AiCodingAgent.py --generate "Build a REST API client" --model qwen2.5-coder:7b
+
+# Windows — use qwen3 for complex tasks
+python ESIB_AiCodingAgent.py --generate "Build a REST API client" --model qwen3:8b
 ```
 
 ---
@@ -270,33 +319,61 @@ python3 ESIB_AiCodingAgent.py --generate "Build a REST API client" --model qwen3
 ## Command Reference
 
 ```bash
-# Health check
+# ── Health check ──────────────────────────────────────────────────────────────
+# Linux/macOS
 python3 pre_check.py
+# Windows
+python pre_check.py
 
-# Generate — default model (qwen3:8b)
+# ── Generate — default model (qwen3:8b) ───────────────────────────────────────
+# Linux/macOS
 python3 ESIB_AiCodingAgent.py --generate "your prompt"
+# Windows
+python ESIB_AiCodingAgent.py --generate "your prompt"
 
-# Generate — specific model
+# ── Generate — specific model ─────────────────────────────────────────────────
+# Linux/macOS
 python3 ESIB_AiCodingAgent.py --generate "your prompt" --model qwen2.5-coder:7b
 python3 ESIB_AiCodingAgent.py --generate "your prompt" --model qwen3:8b
+# Windows
+python ESIB_AiCodingAgent.py --generate "your prompt" --model qwen2.5-coder:7b
+python ESIB_AiCodingAgent.py --generate "your prompt" --model qwen3:8b
 
-# Generate — save to custom path
+# ── Generate — save to custom path ────────────────────────────────────────────
+# Linux/macOS
 python3 ESIB_AiCodingAgent.py --generate "your prompt" --output my_script.py
+# Windows
+python ESIB_AiCodingAgent.py --generate "your prompt" --output my_script.py
 
-# Debug
+# ── Debug ─────────────────────────────────────────────────────────────────────
+# Linux/macOS
 python3 ESIB_AiCodingAgent.py --fix script.py
 python3 ESIB_AiCodingAgent.py --fix script.py --model qwen2.5-coder:7b
+# Windows
+python ESIB_AiCodingAgent.py --fix script.py
+python ESIB_AiCodingAgent.py --fix script.py --model qwen2.5-coder:7b
 
-# Demo
+# ── Demo ──────────────────────────────────────────────────────────────────────
+# Linux/macOS
 python3 ESIB_AiCodingAgent.py --demo
 python3 ESIB_AiCodingAgent.py --demo --demo-mode generate
 python3 ESIB_AiCodingAgent.py --demo --demo-mode debug
+# Windows
+python ESIB_AiCodingAgent.py --demo
+python ESIB_AiCodingAgent.py --demo --demo-mode generate
+python ESIB_AiCodingAgent.py --demo --demo-mode debug
 
-# Verbose logging
+# ── Verbose logging ───────────────────────────────────────────────────────────
+# Linux/macOS
 python3 ESIB_AiCodingAgent.py --generate "..." --verbose
+# Windows
+python ESIB_AiCodingAgent.py --generate "..." --verbose
 
-# Help
+# ── Help ──────────────────────────────────────────────────────────────────────
+# Linux/macOS
 python3 ESIB_AiCodingAgent.py --help
+# Windows
+python ESIB_AiCodingAgent.py --help
 ```
 
 ---
@@ -310,7 +387,7 @@ python3 ESIB_AiCodingAgent.py --help
 | `OLLAMA_MODEL` | `qwen3:8b` | LLM model to use |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama API endpoint |
 | `MAX_DEBUG_ITERATIONS` | `10` | Max debugging attempts |
-| `LLM_TIMEOUT` | `120` | LLM call timeout (seconds) |
+| `LLM_TIMEOUT` | `180` | LLM call timeout (seconds) |
 | `AGENT_WORKSPACE` | (cwd) | Working directory for guardrails |
 
 ---
@@ -358,7 +435,10 @@ curl http://localhost:11434
 ollama list   # Check what is installed
 
 # Run with whichever model is available
+# Linux/macOS
 python3 ESIB_AiCodingAgent.py --generate "..." --model qwen2.5-coder:7b
+# Windows
+python ESIB_AiCodingAgent.py --generate "..." --model qwen2.5-coder:7b
 
 # Or pull qwen3:8b when internet is available
 ollama pull qwen3:8b
@@ -413,4 +493,4 @@ MIT License — see [LICENSE](LICENSE) for details.
 
 ---
 
-*Last updated: April 24, 2026*
+*Last updated: April 25, 2026*

@@ -4,6 +4,17 @@ Get the ESIB AI Coding Agent running in under 10 minutes.
 
 ---
 
+## Python Command Note
+
+Depending on your OS, the Python command differs:
+
+- **Windows:** use `python`
+- **Linux / macOS:** use `python3`
+
+All commands in this guide are shown for both platforms.
+
+---
+
 ## Prerequisites Check
 
 **BEFORE running setup, verify these are installed and running:**
@@ -13,8 +24,11 @@ Get the ESIB AI Coding Agent running in under 10 minutes.
 > **Python 3.10 or higher is required.** The project uses the `str | None` union type-hint syntax introduced in 3.10. Older versions (3.8, 3.9) will crash on startup.
 
 ```bash
-python3 --version    # Linux/macOS
-python --version     # Windows
+# Linux/macOS
+python3 --version
+
+# Windows
+python --version
 ```
 **Expected:** `Python 3.10.x` or higher
 
@@ -96,6 +110,9 @@ cd FYP\coding_agent
 
 :: 2. Run setup — installs everything and opens an activated shell automatically
 .\setup.bat
+
+:: 3. Verify everything is ready (run this inside the shell that setup opened)
+python pre_check.py
 ```
 
 > `setup.bat` activates the virtual environment and launches `run.bat` automatically at the end. Once setup finishes, you are already inside an active shell — run `python pre_check.py` straight away.
@@ -112,6 +129,9 @@ chmod +x setup.sh run.sh
 
 # 3. Run setup — installs everything and opens an activated shell automatically
 ./setup.sh
+
+# 4. Verify everything is ready (run this inside the shell that setup opened)
+python3 pre_check.py
 ```
 
 > `setup.sh` activates the virtual environment and launches `./run.sh` automatically at the end. Once setup finishes, you are already inside an active shell — run `python3 pre_check.py` straight away.
@@ -161,16 +181,24 @@ After first-time setup, every time you open a new terminal you need to re-activa
 ### Windows
 
 ```cmd
+:: 1. Activate the virtual environment
 run.bat
+
+:: 2. Verify the system is healthy before starting work
+python pre_check.py
 ```
 
 ### Linux / macOS
 
 ```bash
+# 1. Activate the virtual environment
 ./run.sh
+
+# 2. Verify the system is healthy before starting work
+python3 pre_check.py
 ```
 
-You will see:
+You will see after activation:
 
 ```
 ======================================================================
@@ -186,6 +214,8 @@ Now you can run:
 
 > **Keep this window open** for your entire session. All subsequent Python commands go here.
 
+> **Always run `pre_check.py` at the start of each session** — it confirms Docker is running, Ollama is responding, and the model is available before you begin.
+
 ---
 
 ## First Run — Generation Mode
@@ -193,7 +223,11 @@ Now you can run:
 Create code from a natural language prompt.
 
 ```bash
+# Linux/macOS
 python3 ESIB_AiCodingAgent.py --generate "Create a simple calculator"
+
+# Windows
+python ESIB_AiCodingAgent.py --generate "Create a simple calculator"
 ```
 
 **What happens:**
@@ -205,7 +239,11 @@ python3 ESIB_AiCodingAgent.py --generate "Create a simple calculator"
 
 **More complex example:**
 ```bash
+# Linux/macOS
 python3 ESIB_AiCodingAgent.py --generate "Build a web scraper that extracts article titles and summaries from a news website, handles pagination, and saves results to CSV"
+
+# Windows
+python ESIB_AiCodingAgent.py --generate "Build a web scraper that extracts article titles and summaries from a news website, handles pagination, and saves results to CSV"
 ```
 
 ---
@@ -215,7 +253,11 @@ python3 ESIB_AiCodingAgent.py --generate "Build a web scraper that extracts arti
 Automatically detect and fix errors in broken scripts.
 
 ```bash
+# Linux/macOS
 python3 ESIB_AiCodingAgent.py --fix demos/03_broken_script.py
+
+# Windows
+python ESIB_AiCodingAgent.py --fix demos/03_broken_script.py
 ```
 
 **What happens:**
@@ -231,11 +273,17 @@ python3 ESIB_AiCodingAgent.py --fix demos/03_broken_script.py
 The agent defaults to `qwen3:8b`. Use `--model` to switch:
 
 ```bash
-# Explicitly use qwen3:8b
+# Linux/macOS — explicitly use qwen3:8b
 python3 ESIB_AiCodingAgent.py --generate "..." --model qwen3:8b
 
-# Use qwen2.5-coder:7b (e.g. if qwen3 is unavailable or slow)
+# Windows — explicitly use qwen3:8b
+python ESIB_AiCodingAgent.py --generate "..." --model qwen3:8b
+
+# Linux/macOS — use qwen2.5-coder:7b (e.g. if qwen3 is unavailable or slow)
 python3 ESIB_AiCodingAgent.py --generate "..." --model qwen2.5-coder:7b
+
+# Windows — use qwen2.5-coder:7b
+python ESIB_AiCodingAgent.py --generate "..." --model qwen2.5-coder:7b
 ```
 
 ### If `qwen3:8b` is not available on your machine
@@ -243,8 +291,13 @@ python3 ESIB_AiCodingAgent.py --generate "..." --model qwen2.5-coder:7b
 If you only have `qwen2.5-coder:7b` installed, always pass `--model qwen2.5-coder:7b`:
 
 ```bash
+# Linux/macOS
 python3 ESIB_AiCodingAgent.py --generate "Create a calculator" --model qwen2.5-coder:7b
 python3 ESIB_AiCodingAgent.py --fix buggy.py --model qwen2.5-coder:7b
+
+# Windows
+python ESIB_AiCodingAgent.py --generate "Create a calculator" --model qwen2.5-coder:7b
+python ESIB_AiCodingAgent.py --fix buggy.py --model qwen2.5-coder:7b
 ```
 
 Check what models are installed:
@@ -263,22 +316,40 @@ ollama pull qwen3:8b
 
 ```bash
 # Help
+# Linux/macOS
 python3 ESIB_AiCodingAgent.py --help
+# Windows
+python ESIB_AiCodingAgent.py --help
 
 # Verbose logging (shows all pipeline stages)
+# Linux/macOS
 python3 ESIB_AiCodingAgent.py --generate "..." --verbose
 python3 ESIB_AiCodingAgent.py --fix script.py --verbose
+# Windows
+python ESIB_AiCodingAgent.py --generate "..." --verbose
+python ESIB_AiCodingAgent.py --fix script.py --verbose
 
 # Save generated script to a custom path
+# Linux/macOS
 python3 ESIB_AiCodingAgent.py --generate "..." --output my_script.py
+# Windows
+python ESIB_AiCodingAgent.py --generate "..." --output my_script.py
 
 # Run built-in demo
+# Linux/macOS
 python3 ESIB_AiCodingAgent.py --demo
 python3 ESIB_AiCodingAgent.py --demo --demo-mode generate
 python3 ESIB_AiCodingAgent.py --demo --demo-mode debug
+# Windows
+python ESIB_AiCodingAgent.py --demo
+python ESIB_AiCodingAgent.py --demo --demo-mode generate
+python ESIB_AiCodingAgent.py --demo --demo-mode debug
 
 # System health check
+# Linux/macOS
 python3 pre_check.py
+# Windows
+python pre_check.py
 ```
 
 ---
@@ -315,7 +386,10 @@ ollama pull qwen3:8b
 ollama pull qwen2.5-coder:7b
 
 # If only qwen2.5-coder is available, always add --model:
+# Linux/macOS
 python3 ESIB_AiCodingAgent.py --generate "..." --model qwen2.5-coder:7b
+# Windows
+python ESIB_AiCodingAgent.py --generate "..." --model qwen2.5-coder:7b
 ```
 
 ### "Python not found"
@@ -348,20 +422,21 @@ coding_agent/
 ### Try generation
 
 ```bash
-# Simple
+# Linux/macOS
 python3 ESIB_AiCodingAgent.py --generate "Create a CSV parser"
-
-# Medium
 python3 ESIB_AiCodingAgent.py --generate "Build a to-do list manager with SQLite"
-
-# Complex
 python3 ESIB_AiCodingAgent.py --generate "Create a REST API with authentication, rate limiting, and database integration"
+
+# Windows
+python ESIB_AiCodingAgent.py --generate "Create a CSV parser"
+python ESIB_AiCodingAgent.py --generate "Build a to-do list manager with SQLite"
+python ESIB_AiCodingAgent.py --generate "Create a REST API with authentication, rate limiting, and database integration"
 ```
 
 ### Try debug mode
 
 ```bash
-# Create a buggy script
+# Linux/macOS — create a buggy script
 cat > buggy.py << 'EOF'
 def divide(a, b):
     return a / b
@@ -369,8 +444,11 @@ def divide(a, b):
 print(divide(10, 0))
 EOF
 
-# Fix it automatically
+# Fix it automatically (Linux/macOS)
 python3 ESIB_AiCodingAgent.py --fix buggy.py
+
+# Windows — create a buggy script (save the lines above to buggy.py manually, then run:)
+python ESIB_AiCodingAgent.py --fix buggy.py
 ```
 
 ### Check pipeline statistics
@@ -378,7 +456,11 @@ python3 ESIB_AiCodingAgent.py --fix buggy.py
 After each run, `logs/pipeline_run_stats.jsonl` is updated:
 
 ```bash
+# Linux/macOS
 cat logs/pipeline_run_stats.jsonl
+
+# Windows
+type logs\pipeline_run_stats.jsonl
 ```
 
 Each entry records: `run_id`, `timestamp`, `status`, `stage reached`, `token usage`, `estimated cost`, and a `summary` with the generated file path, function count, and class count.
@@ -389,19 +471,23 @@ Each entry records: `run_id`, `timestamp`, `status`, `stage reached`, `token usa
 
 ```bash
 # Linux/macOS
-export OLLAMA_MODEL=qwen2.5-coder:7b
+export OLLAMA_MODEL=qwen3:8b              # or qwen2.5-coder:7b
 export LLM_TIMEOUT=300
 
 # Windows CMD
-set OLLAMA_MODEL=qwen2.5-coder:7b
+set OLLAMA_MODEL=qwen3:8b
 set LLM_TIMEOUT=300
+
+# Windows PowerShell
+$env:OLLAMA_MODEL="qwen3:8b"
+$env:LLM_TIMEOUT="300"
 ```
 
 ---
 
 ## Verification Checklist
 
-- [ ] `python3 pre_check.py` — all green
+- [ ] `python3 pre_check.py` (Linux/macOS) / `python pre_check.py` (Windows) — all green
 - [ ] `docker ps` — no errors
 - [ ] `curl http://localhost:11434` — returns "Ollama is running"
 - [ ] `ollama list` — shows at least `qwen3:8b`

@@ -8,7 +8,7 @@
 # ============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
+cd "$SCRIPT_DIR" || exit 1
 
 # Check if virtual environment exists
 if [ ! -f ".venv/bin/activate" ]; then
@@ -43,7 +43,20 @@ echo "======================================================================"
 echo ""
 
 # Keep the shell open with venv activated.
-# $SHELL is the user's login shell (bash on Linux, zsh on macOS).
-# Falling back to bash if $SHELL is unset or unavailable.
-CURRENT_SHELL="${SHELL:-bash}"
-exec "$CURRENT_SHELL" --norc --noprofile 2>/dev/null || exec bash --norc --noprofile
+# $SHELL is the user's login shell (usually bash on Linux, zsh on macOS).
+# Each shell has different flags for "don't load rc files", so we detect
+# which shell it is and pass the right options. Falls back to plain bash
+# if none of the detected shells can launch.
+CURRENT_SHELL="${SHELL:-/bin/bash}"
+CURRENT_SHELL_NAME="$(basename "$CURRENT_SHELL")"
+
+case "$CURRENT_SHELL_NAME" in
+    zsh)
+        exec "$CURRENT_SHELL" -i ;;
+    bash|sh)
+        exec "$CURRENT_SHELL" --norc --noprofile -i ;;
+    *)
+        # Unknown shell — just exec it interactively and hope for the best,
+        # then fall back to bash if that fails.
+        exec "$CURRENT_SHELL" -i 2>/dev/null || exec bash --norc --noprofile -i ;;
+esac
