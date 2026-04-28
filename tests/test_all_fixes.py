@@ -27,9 +27,9 @@ from datetime import datetime
 from pathlib import Path
 
 # ── Path setup ──────────────────────────────────────────────────────────────
-# This test file lives in coding_agent/tests/
-# Modules live in coding_agent/src/{orchestrator,generation,debugging,guardrails}/
-# and coding_agent/docker/
+# This test file lives in tests/
+# Modules live in src/{orchestrator,generation,debugging,guardrails}/
+# and docker/
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.abspath(os.path.join(_HERE, ".."))
 

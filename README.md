@@ -58,7 +58,7 @@ ESIB AI Coding Agent is an autonomous AI system that generates Python code from 
 **Linux/macOS:**
 ```bash
 git clone https://github.com/Joedaoud128/FYP.git
-cd FYP/coding_agent
+cd FYP
 chmod +x setup.sh run.sh
 ./setup.sh
 ./run.sh
@@ -68,7 +68,7 @@ python3 pre_check.py     # verify everything is ready
 **Windows:**
 ```cmd
 git clone https://github.com/Joedaoud128/FYP.git
-cd FYP\coding_agent
+cd FYP
 .\setup.bat
 run.bat
 python pre_check.py
@@ -247,7 +247,7 @@ Orchestrator  (Module 11 — Maria)
 ## Project Structure
 
 ```
-coding_agent/
+FYP/
 ├── ESIB_AiCodingAgent.py      # Main CLI entry point
 ├── orchestrator.py            # Orchestration core
 ├── orchestrator_handoff.py    # Schema A/B handoff & validation

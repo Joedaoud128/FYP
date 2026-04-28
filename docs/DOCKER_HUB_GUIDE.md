@@ -55,7 +55,7 @@ Login Succeeded
 ### Step 1: Navigate to Project Root
 
 ```bash
-cd /path/to/your/FYP/coding_agent
+cd /path/to/your/FYP
 # Make sure you're in the directory that contains docker/Dockerfile
 ```
 

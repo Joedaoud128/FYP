@@ -106,7 +106,7 @@ ollama serve &
 ```cmd
 :: 1. Clone repository
 git clone https://github.com/Joedaoud128/FYP.git
-cd FYP\coding_agent
+cd FYP
 
 :: 2. Run setup — installs everything and opens an activated shell automatically
 .\setup.bat
@@ -122,7 +122,7 @@ python pre_check.py
 ```bash
 # 1. Clone repository
 git clone https://github.com/Joedaoud128/FYP.git
-cd FYP/coding_agent
+cd FYP
 
 # 2. Make scripts executable
 chmod +x setup.sh run.sh
@@ -411,7 +411,7 @@ Add Python to PATH:
 ## What You Get After Setup
 
 ```
-coding_agent/
+FYP/
 ├── .venv/                              # Virtual environment
 ├── logs/                               # Session logs & pipeline stats
 │   └── pipeline_run_stats.jsonl        # Token usage & cost tracking
