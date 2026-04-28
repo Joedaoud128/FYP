@@ -486,7 +486,7 @@ MIT License — see [LICENSE](LICENSE) for details.
 ## Project Status
 
 **Status:** ✅ Production Ready (v1.0.0)  
-**Demo Date:** May 12, 2026  
+**Demo Date:** May 21, 2026  
 **Docker Hub:** [mariasabbagh1/esib-ai-agent](https://hub.docker.com/r/mariasabbagh1/esib-ai-agent)  
 **Repository:** [github.com/Joedaoud128/FYP](https://github.com/Joedaoud128/FYP)
 
