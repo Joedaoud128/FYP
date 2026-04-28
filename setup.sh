@@ -303,7 +303,7 @@ echo ""
 
 if [ ! -f "docker/Dockerfile" ]; then
     err "Dockerfile not found at docker/Dockerfile!"
-    info "Make sure you are running setup.sh from the project root (coding_agent/)."
+    info "Make sure you are running setup.sh from the project root (FYP/)."
     exit 1
 fi
 

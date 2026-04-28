@@ -321,7 +321,7 @@ echo.
 
 if not exist "docker\Dockerfile" (
     echo [X] Dockerfile not found at docker\Dockerfile!
-    echo     Make sure you are running setup.bat from the project root ^(coding_agent/^).
+    echo     Make sure you are running setup.bat from the project root ^(FYP/^).
     pause
     exit /b 1
 )

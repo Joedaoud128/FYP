@@ -285,7 +285,7 @@ ollama --version
 
 # 2. Clone project
 git clone https://github.com/Joedaoud128/FYP.git
-cd FYP/coding_agent
+cd FYP
 
 # 3. Setup
 ./setup.sh
@@ -378,7 +378,7 @@ your-project/
 **1. `src/generation/generation.py`:**
 - Lines 126-128: Change to environment variable reading
 
-**2. `coding_agent/ESIB_AiCodingAgent.py`:**
+**2. `ESIB_AiCodingAgent.py`:**
 - After line 451: Add `--model` argument
 - After line 494: Add model environment variable setting
 
