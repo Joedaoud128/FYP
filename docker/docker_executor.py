@@ -112,12 +112,30 @@ class DockerExecutor:
 
         The container runs with --network none, so no outbound
         network access is possible during script execution.
+
+        Security flags applied:
+        - --read-only: Immutable root filesystem
+        - --tmpfs /workspace: Ephemeral writable workspace
+        - --network none: No network access
+        - --cap-drop ALL: All capabilities removed
+        - --user 1000:1000: Non-root execution
+        - --memory 512m: Memory cap
+        - --cpus 1: Single CPU core
+        - --pids-limit 100: Max 100 processes
         """
         with tempfile.NamedTemporaryFile(
             mode='w', suffix='.py', dir=tempfile.gettempdir(), delete=False
         ) as tmp:
             tmp.write(code)
             tmp_path = tmp.name
+
+        # Security note: Make file readable by container user (1000:1000)
+        # This is necessary for GitHub Actions where default permissions
+        # may be too restrictive. The file is:
+        # 1. Temporary (deleted after execution)
+        # 2. Mounted read-only (:ro)
+        # 3. Contains only the script to execute (no secrets)
+        os.chmod(tmp_path, 0o644)  # rw-r--r--
 
         start_time = time.time()
         try:
@@ -278,6 +296,10 @@ class DockerExecutor:
         ) as tmp:
             tmp.write(code)
             tmp_path = tmp.name
+
+        # Security note: Make file readable by container user (1000:1000)
+        # Same fix as in execute() method for GitHub Actions compatibility
+        os.chmod(tmp_path, 0o644)  # rw-r--r--
 
         start_time = time.time()
         try:
