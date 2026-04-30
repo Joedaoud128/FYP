@@ -1,0 +1,19 @@
+# ── Testing dependencies ───────────────────────────────────────────────────────
+# Install with: pip install -r requirements-test.txt
+
+# Core test runner
+pytest>=7.4.0
+
+# Coverage measurement (line + branch)
+pytest-cov>=4.1.0
+coverage>=7.3.0
+
+# Static analysis
+flake8>=6.1.0
+mypy>=1.5.0
+
+# HTTP mocking (for Ollama API calls in future generation/debugging tests)
+responses>=0.23.0
+
+# These are only needed if you run system-level tests locally
+# pytest-docker>=2.0.0   # uncomment when running tests/system/test_docker_sandbox.py

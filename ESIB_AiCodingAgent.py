@@ -43,8 +43,17 @@ import json
 import logging
 import tempfile
 import time
+import io
 from datetime import datetime
 from pathlib import Path
+
+# ── Windows UTF-8 encoding fix ─────────────────────────────────────────────────
+# Force UTF-8 encoding for stdout/stderr on Windows to handle Unicode characters
+# like checkmarks and emojis. Linux/macOS already use UTF-8 by default.
+if sys.platform == "win32":
+    # Configure stdout and stderr to use UTF-8 encoding
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 # ── Ensure sibling modules are importable ─────────────────────────────────────
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -134,7 +143,8 @@ def _print_result(mode: str, result: dict, start_time: float) -> None:
     """Print a human-readable summary of an orchestrator result."""
     elapsed  = time.time() - start_time
     status   = result.get("status", "unknown").upper()
-    symbol   = "✓" if status == "SUCCESS" else "✗"
+    # Use ASCII symbols for cross-platform compatibility (no Unicode on Windows cmd)
+    symbol   = "[OK]" if status == "SUCCESS" else "[FAIL]"
     task_id  = result.get("task_id", "N/A")
 
     print(_section(f"{symbol}  {mode.upper()} MODE — {status}  (task: {task_id}, {elapsed:.1f}s)"))
@@ -316,7 +326,8 @@ def _print_summary(results: dict, total_elapsed: float) -> int:
     all_ok = True
     for mode, result in results.items():
         status = result.get("status", "unknown").upper()
-        symbol = "✓" if status == "SUCCESS" else "✗"
+        # Use ASCII symbols for cross-platform compatibility
+        symbol = "[OK]" if status == "SUCCESS" else "[FAIL]"
         print(f"\n  {symbol}  {mode.title():10s} : {status}")
         if status == "SUCCESS":
             if mode == "generate" and result.get("script_path"):

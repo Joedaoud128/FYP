@@ -17,7 +17,7 @@ import tempfile
 import unittest
 import shutil
 
-sys.path.insert(0, os.path.dirname(__file__))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from guardrails_engine import GuardrailsEngine
 
 
@@ -38,7 +38,7 @@ class GuardrailsTestBase(unittest.TestCase):
         with open(os.path.join(ws, "file_b.txt"), "w") as f: f.write("bbb")
         with open(os.path.join(ws, "data.csv"), "w") as f: f.write("a,b\n1,2")
 
-        yaml_path = os.path.join(os.path.dirname(__file__), "guardrails_config.yaml")
+        yaml_path = os.path.join(os.path.dirname(__file__), "..", "..", "src", "guardrails", "guardrails_config.yaml")
         with open(yaml_path) as f:
             content = f.read()
 
