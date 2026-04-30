@@ -171,11 +171,6 @@ Answer **N** (or press Enter) to skip it. Pull it later if you need it:
 ollama pull qwen2.5-coder:7b
 ```
 
-Pull it when you want to:
-- Switch to a dedicated code-specialised model
-- Compare outputs between the two models
-- Use `qwen2.5-coder:7b` as an explicit fallback if `qwen3:8b` is slow on your machine
-
 If you only plan to use `qwen3:8b`, skip this — no extra download needed.
 
 ---
@@ -285,7 +280,7 @@ python3 ESIB_AiCodingAgent.py --generate "..." --model qwen3:8b
 # Windows — explicitly use qwen3:8b
 python ESIB_AiCodingAgent.py --generate "..." --model qwen3:8b
 
-# Linux/macOS — use qwen2.5-coder:7b (e.g. if qwen3 is unavailable or slow)
+# Linux/macOS — use qwen2.5-coder:7b
 python3 ESIB_AiCodingAgent.py --generate "..." --model qwen2.5-coder:7b
 
 # Windows — use qwen2.5-coder:7b
@@ -322,40 +317,30 @@ ollama pull qwen3:8b
 
 ```bash
 # Help
-# Linux/macOS
-python3 ESIB_AiCodingAgent.py --help
-# Windows
-python ESIB_AiCodingAgent.py --help
+python3 ESIB_AiCodingAgent.py --help       # Linux/macOS
+python ESIB_AiCodingAgent.py --help        # Windows
 
 # Verbose logging (shows all pipeline stages)
-# Linux/macOS
-python3 ESIB_AiCodingAgent.py --generate "..." --verbose
-python3 ESIB_AiCodingAgent.py --fix script.py --verbose
-# Windows
-python ESIB_AiCodingAgent.py --generate "..." --verbose
-python ESIB_AiCodingAgent.py --fix script.py --verbose
+python3 ESIB_AiCodingAgent.py --generate "..." --verbose    # Linux/macOS
+python3 ESIB_AiCodingAgent.py --fix script.py --verbose     # Linux/macOS
+python ESIB_AiCodingAgent.py --generate "..." --verbose     # Windows
+python ESIB_AiCodingAgent.py --fix script.py --verbose      # Windows
 
 # Save generated script to a custom path
-# Linux/macOS
-python3 ESIB_AiCodingAgent.py --generate "..." --output my_script.py
-# Windows
-python ESIB_AiCodingAgent.py --generate "..." --output my_script.py
+python3 ESIB_AiCodingAgent.py --generate "..." --output my_script.py   # Linux/macOS
+python ESIB_AiCodingAgent.py --generate "..." --output my_script.py    # Windows
 
 # Run built-in demo
-# Linux/macOS
-python3 ESIB_AiCodingAgent.py --demo
-python3 ESIB_AiCodingAgent.py --demo --demo-mode generate
-python3 ESIB_AiCodingAgent.py --demo --demo-mode debug
-# Windows
-python ESIB_AiCodingAgent.py --demo
-python ESIB_AiCodingAgent.py --demo --demo-mode generate
-python ESIB_AiCodingAgent.py --demo --demo-mode debug
+python3 ESIB_AiCodingAgent.py --demo                        # Linux/macOS
+python3 ESIB_AiCodingAgent.py --demo --demo-mode generate   # Linux/macOS
+python3 ESIB_AiCodingAgent.py --demo --demo-mode debug      # Linux/macOS
+python ESIB_AiCodingAgent.py --demo                         # Windows
+python ESIB_AiCodingAgent.py --demo --demo-mode generate    # Windows
+python ESIB_AiCodingAgent.py --demo --demo-mode debug       # Windows
 
 # System health check
-# Linux/macOS
-python3 pre_check.py
-# Windows
-python pre_check.py
+python3 pre_check.py    # Linux/macOS
+python pre_check.py     # Windows
 ```
 
 ---
@@ -392,10 +377,8 @@ ollama pull qwen3:8b
 ollama pull qwen2.5-coder:7b
 
 # If only qwen2.5-coder is available, always add --model:
-# Linux/macOS
-python3 ESIB_AiCodingAgent.py --generate "..." --model qwen2.5-coder:7b
-# Windows
-python ESIB_AiCodingAgent.py --generate "..." --model qwen2.5-coder:7b
+python3 ESIB_AiCodingAgent.py --generate "..." --model qwen2.5-coder:7b   # Linux/macOS
+python ESIB_AiCodingAgent.py --generate "..." --model qwen2.5-coder:7b    # Windows
 ```
 
 ### "Python not found"
@@ -405,6 +388,60 @@ Add Python to PATH:
 - Restart terminal and try again
 
 **For full troubleshooting:** See [TROUBLESHOOTING.md](TROUBLESHOOTING.md)
+
+---
+
+## Running the Tests
+
+The test suite runs entirely inside your virtual environment. The unit and integration layers require no Ollama or Docker.
+
+### Step 1 — Install test dependencies
+
+```bash
+# Linux/macOS
+pip3 install -r requirements-test.txt
+
+# Windows
+pip install -r requirements-test.txt
+```
+
+### Step 2 — Run all unit and integration tests
+
+```bash
+# Linux/macOS
+pytest tests/unit tests/integration -v
+
+# Windows
+python -m pytest tests/unit tests/integration -v
+```
+
+You should see **289 passed** in approximately 1 second.
+
+### Step 3 — Run system tests (optional)
+
+System tests verify Docker isolation and the full CLI pipeline. Docker security tests require Docker; LLM tests additionally require Ollama.
+
+```bash
+# Docker sandbox security tests (requires Docker, no Ollama)
+# Linux/macOS
+pytest tests/system/test_docker_sandbox.py -v -m system
+# Windows
+python -m pytest tests/system/test_docker_sandbox.py -v -m system
+
+# CLI sanity checks only (no LLM required)
+# Linux/macOS
+pytest tests/system -v -m "system and not slow"
+# Windows
+python -m pytest tests/system -v -m "system and not slow"
+
+# Full system tests including LLM fix and generate modes (requires Ollama)
+# Linux/macOS
+pytest tests/system -v -m system
+# Windows
+python -m pytest tests/system -v -m system
+```
+
+**For the full testing guide** — test inventory, coverage targets, and CI structure — see [TESTING.md](TESTING.md).
 
 ---
 
@@ -418,7 +455,8 @@ FYP/
 ├── src/generation/generated_code/      # Generated scripts appear here
 ├── memory_store/                       # Error pattern memory
 ├── demos/                              # Example scripts
-└── docker/                             # Sandbox container definition
+├── tests/                              # Automated test suite (309 tests)
+└── Dockerfile                          # Sandbox container definition
 ```
 
 ---
@@ -453,7 +491,7 @@ EOF
 # Fix it automatically (Linux/macOS)
 python3 ESIB_AiCodingAgent.py --fix buggy.py
 
-# Windows — create a buggy script (save the lines above to buggy.py manually, then run:)
+# Windows — save the above to buggy.py manually, then run:
 python ESIB_AiCodingAgent.py --fix buggy.py
 ```
 
@@ -477,7 +515,7 @@ Each entry records: `run_id`, `timestamp`, `status`, `stage reached`, `token usa
 
 ```bash
 # Linux/macOS
-export OLLAMA_MODEL=qwen3:8b              # or qwen2.5-coder:7b
+export OLLAMA_MODEL=qwen3:8b
 export LLM_TIMEOUT=300
 
 # Windows CMD
@@ -497,6 +535,7 @@ $env:LLM_TIMEOUT="300"
 - [ ] `docker ps` — no errors
 - [ ] `curl http://localhost:11434` — returns "Ollama is running"
 - [ ] `ollama list` — shows at least `qwen3:8b`
+- [ ] `pytest tests/unit tests/integration -v` — 289 passed
 - [ ] Generation mode creates a working script in `src/generation/generated_code/`
 - [ ] Debug mode fixes a broken script
 - [ ] `logs/pipeline_run_stats.jsonl` is updated after each run

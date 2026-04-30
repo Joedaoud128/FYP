@@ -4,6 +4,8 @@
 [![Docker](https://img.shields.io/badge/docker-required-blue)](https://www.docker.com/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Docker Hub](https://img.shields.io/badge/docker%20hub-mariasabbagh1%2Fesib--ai--agent-blue)](https://hub.docker.com/r/mariasabbagh1/esib-ai-agent)
+[![Tests](https://github.com/Joedaoud128/FYP/actions/workflows/test.yml/badge.svg)](https://github.com/Joedaoud128/FYP/actions/workflows/test.yml)
+[![Coverage](https://img.shields.io/badge/coverage-48%25-brightgreen)](tests/)
 
 > Autonomous LLM agent for proactive code generation and reactive debugging
 
@@ -41,6 +43,7 @@ ESIB AI Coding Agent is an autonomous AI system that generates Python code from 
   - Pre-built Docker image on Docker Hub
   - One-command setup
   - Comprehensive health checks and structured logging
+  - 309 automated tests with CI on every push
 
 ---
 
@@ -244,30 +247,97 @@ Orchestrator  (Module 11 — Maria)
 
 ---
 
+## Testing
+
+The project includes a comprehensive automated test suite covering all core modules. Tests are split into three layers — **unit**, **integration**, and **system** — and run automatically on every push to `main` via GitHub Actions.
+
+**Full testing guide:** See [TESTING.md](TESTING.md)
+
+### Run the tests
+
+```bash
+# Install test dependencies (inside activated virtual environment)
+pip install -r requirements-test.txt
+
+# Run all unit and integration tests — no Ollama or Docker required, ~1 second
+# Linux/macOS
+pytest tests/unit tests/integration -v
+
+# Windows
+python -m pytest tests/unit tests/integration -v
+```
+
+### Test coverage at a glance
+
+| Layer | Files | Tests | External services needed |
+|-------|-------|-------|--------------------------|
+| Unit | 6 | 228 | None |
+| Integration | 3 | 61 | None |
+| System | 3 | 20 | Docker (sandbox), Ollama (LLM tests) |
+| **Total** | **12** | **309** | — |
+
+### CI pipeline
+
+Tests run automatically on every push to `main` via GitHub Actions across Python 3.10, 3.11, and 3.13. The pipeline has two stages:
+
+- **Stage 1 — Fast Tests (parallel):** unit + integration tests across the Python matrix (~1 minute)
+- **Stage 2 — Specialised jobs:** Docker Security Tests and Guardrails Integration run on every push; Generate Mode and Fix Mode tests are manually triggered (require live Ollama)
+
+```bash
+# Run Docker sandbox security tests (requires Docker)
+pytest tests/system/test_docker_sandbox.py -v -m system
+
+# Run system tests — CLI sanity only, no LLM needed
+pytest tests/system -v -m "system and not slow"
+```
+
+---
+
 ## Project Structure
 
 ```
 FYP/
-├── ESIB_AiCodingAgent.py      # Main CLI entry point
-├── orchestrator.py            # Orchestration core
-├── orchestrator_handoff.py    # Schema A/B handoff & validation
-├── agent_logger.py            # Structured JSON logger (Module 12)
-├── memory_store.py            # Error pattern memory (Module 10)
-├── generation.py              # Code generation pipeline (Module 3)
-├── debugging.py               # Debugging service (Module 4)
-├── guardrails_engine.py       # Security engine (Module 7)
-├── guardrails_config.yaml     # Security policy config
-├── pre_check.py               # System health check
-├── requirements.txt           # Python dependencies
-├── setup.sh / setup.bat       # One-command setup scripts
-├── run.sh / run.bat           # Virtual environment activators
-├── docker/
-│   └── Dockerfile             # Hardened sandbox image
-├── demos/                     # Example scenarios
+├── ESIB_AiCodingAgent.py           # Main CLI entry point
+├── orchestrator.py                 # Orchestration core (Module 11)
+├── orchestrator_handoff.py         # Schema A/B handoff & validation
+├── agent_logger.py                 # Structured JSON logger (Module 12)
+├── memory_store.py                 # Error pattern memory (Module 10)
+├── generation.py                   # Code generation pipeline (Module 3)
+├── debugging.py                    # Debugging service (Module 4)
+├── guardrails_engine.py            # Security engine (Module 7)
+├── guardrails_config.yaml          # Security policy configuration
+├── pre_check.py                    # System health check
+├── requirements.txt                # Runtime Python dependencies
+├── requirements-test.txt           # Testing dependencies
+├── pytest.ini                      # Pytest configuration
+├── setup.sh / setup.bat            # One-command setup scripts
+├── run.sh / run.bat                # Virtual environment activators
+├── Dockerfile                      # Hardened sandbox image definition
+├── demos/                          # Example scenarios
 │   ├── 01_calculator.txt
 │   ├── 02_web_scraper.txt
 │   └── 03_broken_script.py
-└── logs/                      # Session logs & pipeline stats
+├── tests/                          # Automated test suite (309 tests)
+│   ├── conftest.py                 # Shared fixtures
+│   ├── unit/                       # Module-level isolation (no external services)
+│   │   ├── test_handoff_validator.py
+│   │   ├── test_environment_preparer.py
+│   │   ├── test_memory_store.py
+│   │   ├── test_docker_executor_pure.py
+│   │   ├── test_agent_logger.py
+│   │   └── test_guardrails_engine.py
+│   ├── integration/                # Multi-module wiring (no LLM/Docker)
+│   │   ├── test_process_handoff.py
+│   │   ├── test_orchestrator_logic.py
+│   │   └── test_guardrails_integration.py
+│   └── system/                     # End-to-end CLI (requires Docker/Ollama)
+│       ├── test_cli_fix_mode.py
+│       ├── test_cli_generate_mode.py
+│       └── test_docker_sandbox.py
+├── .github/
+│   └── workflows/
+│       └── test.yml                # CI: automated on every push to main
+└── logs/                           # Session logs & pipeline stats
     └── pipeline_run_stats.jsonl
 ```
 
@@ -300,16 +370,12 @@ python ESIB_AiCodingAgent.py --fix demos\03_broken_script.py
 ### Use a specific model
 
 ```bash
-# Linux/macOS — use qwen2.5-coder (e.g. if qwen3 is unavailable)
+# Linux/macOS
 python3 ESIB_AiCodingAgent.py --generate "Build a REST API client" --model qwen2.5-coder:7b
-
-# Linux/macOS — use qwen3 for complex tasks
 python3 ESIB_AiCodingAgent.py --generate "Build a REST API client" --model qwen3:8b
 
-# Windows — use qwen2.5-coder (e.g. if qwen3 is unavailable)
+# Windows
 python ESIB_AiCodingAgent.py --generate "Build a REST API client" --model qwen2.5-coder:7b
-
-# Windows — use qwen3 for complex tasks
 python ESIB_AiCodingAgent.py --generate "Build a REST API client" --model qwen3:8b
 ```
 
@@ -319,60 +385,34 @@ python ESIB_AiCodingAgent.py --generate "Build a REST API client" --model qwen3:
 
 ```bash
 # ── Health check ──────────────────────────────────────────────────────────────
-# Linux/macOS
-python3 pre_check.py
-# Windows
-python pre_check.py
+python3 pre_check.py          # Linux/macOS
+python pre_check.py           # Windows
 
 # ── Generate — default model (qwen3:8b) ───────────────────────────────────────
-# Linux/macOS
-python3 ESIB_AiCodingAgent.py --generate "your prompt"
-# Windows
-python ESIB_AiCodingAgent.py --generate "your prompt"
+python3 ESIB_AiCodingAgent.py --generate "your prompt"    # Linux/macOS
+python ESIB_AiCodingAgent.py --generate "your prompt"     # Windows
 
 # ── Generate — specific model ─────────────────────────────────────────────────
-# Linux/macOS
 python3 ESIB_AiCodingAgent.py --generate "your prompt" --model qwen2.5-coder:7b
 python3 ESIB_AiCodingAgent.py --generate "your prompt" --model qwen3:8b
-# Windows
-python ESIB_AiCodingAgent.py --generate "your prompt" --model qwen2.5-coder:7b
-python ESIB_AiCodingAgent.py --generate "your prompt" --model qwen3:8b
 
 # ── Generate — save to custom path ────────────────────────────────────────────
-# Linux/macOS
 python3 ESIB_AiCodingAgent.py --generate "your prompt" --output my_script.py
-# Windows
-python ESIB_AiCodingAgent.py --generate "your prompt" --output my_script.py
 
 # ── Debug ─────────────────────────────────────────────────────────────────────
-# Linux/macOS
 python3 ESIB_AiCodingAgent.py --fix script.py
 python3 ESIB_AiCodingAgent.py --fix script.py --model qwen2.5-coder:7b
-# Windows
-python ESIB_AiCodingAgent.py --fix script.py
-python ESIB_AiCodingAgent.py --fix script.py --model qwen2.5-coder:7b
 
 # ── Demo ──────────────────────────────────────────────────────────────────────
-# Linux/macOS
 python3 ESIB_AiCodingAgent.py --demo
 python3 ESIB_AiCodingAgent.py --demo --demo-mode generate
 python3 ESIB_AiCodingAgent.py --demo --demo-mode debug
-# Windows
-python ESIB_AiCodingAgent.py --demo
-python ESIB_AiCodingAgent.py --demo --demo-mode generate
-python ESIB_AiCodingAgent.py --demo --demo-mode debug
 
 # ── Verbose logging ───────────────────────────────────────────────────────────
-# Linux/macOS
 python3 ESIB_AiCodingAgent.py --generate "..." --verbose
-# Windows
-python ESIB_AiCodingAgent.py --generate "..." --verbose
 
 # ── Help ──────────────────────────────────────────────────────────────────────
-# Linux/macOS
 python3 ESIB_AiCodingAgent.py --help
-# Windows
-python ESIB_AiCodingAgent.py --help
 ```
 
 ---
@@ -434,10 +474,8 @@ curl http://localhost:11434
 ollama list   # Check what is installed
 
 # Run with whichever model is available
-# Linux/macOS
-python3 ESIB_AiCodingAgent.py --generate "..." --model qwen2.5-coder:7b
-# Windows
-python ESIB_AiCodingAgent.py --generate "..." --model qwen2.5-coder:7b
+python3 ESIB_AiCodingAgent.py --generate "..." --model qwen2.5-coder:7b   # Linux/macOS
+python ESIB_AiCodingAgent.py --generate "..." --model qwen2.5-coder:7b    # Windows
 
 # Or pull qwen3:8b when internet is available
 ollama pull qwen3:8b
@@ -449,6 +487,7 @@ ollama pull qwen3:8b
 
 - **[QUICKSTART.md](QUICKSTART.md)** — Complete setup and usage guide
 - **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** — Detailed problem resolution
+- **[TESTING.md](TESTING.md)** — Test suite architecture, inventory, and how to run
 
 ---
 
@@ -485,11 +524,11 @@ MIT License — see [LICENSE](LICENSE) for details.
 
 ## Project Status
 
-**Status:** ✅ Production Ready (v1.0.0)  
+**Status:** ✅ Production Ready (v1.2.0)  
 **Demo Date:** May 21, 2026  
 **Docker Hub:** [mariasabbagh1/esib-ai-agent](https://hub.docker.com/r/mariasabbagh1/esib-ai-agent)  
 **Repository:** [github.com/Joedaoud128/FYP](https://github.com/Joedaoud128/FYP)
 
 ---
 
-*Last updated: April 25, 2026*
+*Last updated: April 30, 2026*
