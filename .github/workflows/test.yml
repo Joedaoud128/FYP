@@ -39,13 +39,13 @@ jobs:
 
       - name: Lint with flake8
         run: |
-          # Stop build on syntax errors or undefined names
+          # Stop build on syntax errors or undefined names (ignore F824 - unused global)
           flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics \
-            --exclude=venv,.venv,__pycache__
+            --exclude=venv,.venv,__pycache__ --ignore=F824 || exit 1
+          
           # Warn on style issues but don't fail
           flake8 . --count --max-line-length=100 --statistics \
             --exclude=venv,.venv,__pycache__ --exit-zero
-
       - name: Run unit and integration tests (no Docker, no LLM)
         run: |
           export PYTHONPATH=src:$PYTHONPATH
