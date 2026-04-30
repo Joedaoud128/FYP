@@ -298,48 +298,61 @@ pytest tests/system -v -m "system and not slow"
 ```
 FYP/
 ├── ESIB_AiCodingAgent.py           # Main CLI entry point
-├── orchestrator.py                 # Orchestration core (Module 11)
-├── orchestrator_handoff.py         # Schema A/B handoff & validation
-├── agent_logger.py                 # Structured JSON logger (Module 12)
-├── memory_store.py                 # Error pattern memory (Module 10)
-├── generation.py                   # Code generation pipeline (Module 3)
-├── debugging.py                    # Debugging service (Module 4)
-├── guardrails_engine.py            # Security engine (Module 7)
-├── guardrails_config.yaml          # Security policy configuration
 ├── pre_check.py                    # System health check
 ├── requirements.txt                # Runtime Python dependencies
 ├── requirements-test.txt           # Testing dependencies
 ├── pytest.ini                      # Pytest configuration
 ├── setup.sh / setup.bat            # One-command setup scripts
 ├── run.sh / run.bat                # Virtual environment activators
-├── Dockerfile                      # Hardened sandbox image definition
+│
+├── src/                            # Source code modules
+│   ├── orchestrator/               # Orchestration core (Module 11)
+│   │   ├── orchestrator.py
+│   │   ├── orchestrator_handoff.py # Schema A/B handoff & validation
+│   │   ├── agent_logger.py         # Structured JSON logger (Module 12)
+│   │   └── memory_store.py         # Error pattern memory (Module 10)
+│   ├── generation/                 # Code generation (Module 3)
+│   │   └── generation.py
+│   ├── debugging/                  # Debugging service (Module 4)
+│   │   └── debugging.py
+│   └── guardrails/                 # Security engine (Module 7)
+│       ├── guardrails_engine.py
+│       └── guardrails_config.yaml
+│
+├── docker/                         # Docker sandbox configuration
+│   ├── Dockerfile                  # Hardened sandbox image definition
+│   └── docker_executor.py          # Docker-based execution engine
+│
 ├── demos/                          # Example scenarios
 │   ├── 01_calculator.txt
 │   ├── 02_web_scraper.txt
 │   └── 03_broken_script.py
+│
 ├── tests/                          # Automated test suite (309 tests)
 │   ├── conftest.py                 # Shared fixtures
-│   ├── unit/                       # Module-level isolation (no external services)
+│   ├── unit/                       # Module-level isolation (228 tests)
 │   │   ├── test_handoff_validator.py
 │   │   ├── test_environment_preparer.py
 │   │   ├── test_memory_store.py
 │   │   ├── test_docker_executor_pure.py
 │   │   ├── test_agent_logger.py
 │   │   └── test_guardrails_engine.py
-│   ├── integration/                # Multi-module wiring (no LLM/Docker)
+│   ├── integration/                # Multi-module wiring (61 tests)
 │   │   ├── test_process_handoff.py
 │   │   ├── test_orchestrator_logic.py
 │   │   └── test_guardrails_integration.py
-│   └── system/                     # End-to-end CLI (requires Docker/Ollama)
+│   └── system/                     # End-to-end CLI (20 tests)
 │       ├── test_cli_fix_mode.py
 │       ├── test_cli_generate_mode.py
 │       └── test_docker_sandbox.py
-├── .github/
+│
+├── .github/                        # CI/CD configuration
 │   └── workflows/
-│       └── test.yml                # CI: automated on every push to main
+│       └── test.yml                # Automated on every push to main
+│
 └── logs/                           # Session logs & pipeline stats
-    └── pipeline_run_stats.jsonl
-```
+    ├── agent_events.jsonl          # Structured event logs
+    └── pipeline_run_stats.jsonl    # Performance metrics
 
 ---
 
