@@ -33,6 +33,7 @@ from pathlib import Path
 _PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 _SRC_DIR = _PROJECT_ROOT / "src" / "orchestrator"
 _GUARDRAILS_DIR = _PROJECT_ROOT / "src" / "guardrails"
+_DOCKER_DIR = _PROJECT_ROOT / "docker"
 
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
@@ -40,6 +41,8 @@ if str(_SRC_DIR) not in sys.path:
     sys.path.insert(0, str(_SRC_DIR))
 if str(_GUARDRAILS_DIR) not in sys.path:
     sys.path.insert(0, str(_GUARDRAILS_DIR))
+if str(_DOCKER_DIR) not in sys.path:
+    sys.path.insert(0, str(_DOCKER_DIR))
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────

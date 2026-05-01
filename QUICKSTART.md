@@ -415,7 +415,7 @@ pytest tests/unit tests/integration -v
 python -m pytest tests/unit tests/integration -v
 ```
 
-You should see **289 passed** in approximately 1 second.
+You should see **302 passed** in approximately 1 second.
 
 ### Step 3 — Run system tests (optional)
 
@@ -455,7 +455,7 @@ FYP/
 ├── src/generation/generated_code/      # Generated scripts appear here
 ├── memory_store/                       # Error pattern memory
 ├── demos/                              # Example scripts
-├── tests/                              # Automated test suite (309 tests)
+├── tests/                              # Automated test suite (322 tests)
 └── Dockerfile                          # Sandbox container definition
 ```
 
@@ -535,7 +535,7 @@ $env:LLM_TIMEOUT="300"
 - [ ] `docker ps` — no errors
 - [ ] `curl http://localhost:11434` — returns "Ollama is running"
 - [ ] `ollama list` — shows at least `qwen3:8b`
-- [ ] `pytest tests/unit tests/integration -v` — 289 passed
+- [ ] `pytest tests/unit tests/integration -v` — 302 passed
 - [ ] Generation mode creates a working script in `src/generation/generated_code/`
 - [ ] Debug mode fixes a broken script
 - [ ] `logs/pipeline_run_stats.jsonl` is updated after each run

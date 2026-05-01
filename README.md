@@ -43,7 +43,7 @@ ESIB AI Coding Agent is an autonomous AI system that generates Python code from 
   - Pre-built Docker image on Docker Hub
   - One-command setup
   - Comprehensive health checks and structured logging
-  - 309 automated tests with CI on every push
+  - 322 automated tests with CI on every push
 
 ---
 
@@ -271,10 +271,10 @@ python -m pytest tests/unit tests/integration -v
 
 | Layer | Files | Tests | External services needed |
 |-------|-------|-------|--------------------------|
-| Unit | 6 | 228 | None |
+| Unit | 6 | 241 | None |
 | Integration | 3 | 61 | None |
 | System | 3 | 20 | Docker (sandbox), Ollama (LLM tests) |
-| **Total** | **12** | **309** | — |
+| **Total** | **12** | **322** | — |
 
 ### CI pipeline
 
@@ -328,9 +328,9 @@ FYP/
 │   ├── 02_web_scraper.txt
 │   └── 03_broken_script.py
 │
-├── tests/                          # Automated test suite (309 tests)
+├── tests/                          # Automated test suite (322 tests)
 │   ├── conftest.py                 # Shared fixtures
-│   ├── unit/                       # Module-level isolation (228 tests)
+│   ├── unit/                       # Module-level isolation (241 tests))
 │   │   ├── test_handoff_validator.py
 │   │   ├── test_environment_preparer.py
 │   │   ├── test_memory_store.py
