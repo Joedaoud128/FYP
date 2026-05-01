@@ -295,10 +295,10 @@ fi
 echo ""
 
 # ============================================================================
-#  STEP 4: Docker sandbox image
+#  STEP 4: Docker sandbox image (Pull from Hub with fallback to build)
 # ============================================================================
 
-echo "[Step 4/6] Building Docker sandbox image..."
+echo "[Step 4/6] Setting up Docker sandbox image..."
 echo ""
 
 if [ ! -f "docker/Dockerfile" ]; then
@@ -307,21 +307,50 @@ if [ ! -f "docker/Dockerfile" ]; then
     exit 1
 fi
 
+# Check if image already exists locally
 if docker image inspect agent-sandbox &>/dev/null; then
-    ok "Docker image 'agent-sandbox' already exists"
+    ok "Docker image 'agent-sandbox' already exists locally"
 else
-    info "Building agent-sandbox image (first time may take ~1-2 min)..."
-    if docker build -t agent-sandbox -f docker/Dockerfile . --quiet; then
-        ok "Docker image built successfully"
-    else
-        warn "Quiet build failed — retrying with verbose output..."
-        if docker build -t agent-sandbox -f docker/Dockerfile .; then
-            ok "Docker image built successfully"
+    # Try to pull from Docker Hub first (faster, ~30 seconds)
+    info "Attempting to pull from Docker Hub: mariasabbagh1/esib-ai-agent:latest"
+    info "This is faster than building locally (~30 seconds vs 2 minutes)"
+    echo ""
+    
+    if docker pull mariasabbagh1/esib-ai-agent:latest; then
+        ok "Docker image pulled successfully from Docker Hub"
+        # Tag the pulled image as agent-sandbox for local compatibility
+        if docker tag mariasabbagh1/esib-ai-agent:latest agent-sandbox; then
+            ok "Image tagged as agent-sandbox"
         else
-            err "Docker build failed!"
-            info "Try:  docker system prune -a  then run setup.sh again."
-            info "Or build manually:  docker build -t agent-sandbox -f docker/Dockerfile ."
-            exit 1
+            warn "Failed to tag image as agent-sandbox"
+            info "The image is available as mariasabbagh1/esib-ai-agent:latest"
+        fi
+    else
+        # If pull fails, fall back to local build
+        echo ""
+        warn "Failed to pull from Docker Hub. Falling back to local build..."
+        info "Building agent-sandbox image (this may take ~1-2 minutes)..."
+        echo ""
+        
+        if docker build -t agent-sandbox -f docker/Dockerfile . --quiet; then
+            ok "Docker image built successfully (local fallback)"
+        else
+            warn "Quiet build failed — retrying with verbose output..."
+            if docker build -t agent-sandbox -f docker/Dockerfile .; then
+                ok "Docker image built successfully (local fallback)"
+            else
+                err "Docker build failed!"
+                echo ""
+                info "Possible solutions:"
+                info "  1. Check your internet connection (for pull attempt)"
+                info "  2. Run:  docker system prune -a"
+                info "  3. Try setup.sh again"
+                echo ""
+                info "Or pull manually later:"
+                info "  docker pull mariasabbagh1/esib-ai-agent:latest"
+                info "  docker tag mariasabbagh1/esib-ai-agent:latest agent-sandbox"
+                exit 1
+            fi
         fi
     fi
 fi

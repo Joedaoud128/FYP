@@ -313,10 +313,10 @@ if /i "!PULL_CODER2!"=="y" (
 echo.
 
 REM ========================================================================
-REM  STEP 4: Docker sandbox image
+REM  STEP 4: Docker sandbox image (Pull from Hub with fallback to build)
 REM ========================================================================
 
-echo [Step 4/6] Building Docker sandbox image...
+echo [Step 4/6] Setting up Docker sandbox image...
 echo.
 
 if not exist "docker\Dockerfile" (
@@ -326,24 +326,57 @@ if not exist "docker\Dockerfile" (
     exit /b 1
 )
 
+REM Check if image already exists locally
 docker images agent-sandbox -q | findstr . >nul 2>&1
 if not errorlevel 1 (
-    echo [OK] Docker image 'agent-sandbox' already exists
-) else (
-    echo       Building agent-sandbox image ^(first time may take ~1-2 min^)...
-    docker build -t agent-sandbox -f docker\Dockerfile . --quiet
-    if errorlevel 1 (
-        echo       Retrying with verbose output...
-        docker build -t agent-sandbox -f docker\Dockerfile .
-        if errorlevel 1 (
-            echo [X] Docker build failed!
-            echo     Try:  docker system prune -a  then run setup.bat again.
-            pause
-            exit /b 1
-        )
-    )
-    echo [OK] Docker image built successfully
+    echo [OK] Docker image 'agent-sandbox' already exists locally
+    goto :docker_done
 )
+
+REM Try to pull from Docker Hub first (faster, ~30 seconds)
+echo       Attempting to pull from Docker Hub: mariasabbagh1/esib-ai-agent:latest
+echo       This is faster than building locally (~30 seconds vs 2 minutes)
+echo.
+docker pull mariasabbagh1/esib-ai-agent:latest
+if not errorlevel 1 (
+    echo [OK] Docker image pulled successfully from Docker Hub
+    REM Tag the pulled image as agent-sandbox for local compatibility
+    docker tag mariasabbagh1/esib-ai-agent:latest agent-sandbox
+    if errorlevel 1 (
+        echo [!]  Warning: Failed to tag image as agent-sandbox
+        echo      The image is available as mariasabbagh1/esib-ai-agent:latest
+    ) else (
+        echo [OK] Image tagged as agent-sandbox
+    )
+    goto :docker_done
+)
+
+REM If pull fails, fall back to local build
+echo.
+echo [!]  Failed to pull from Docker Hub. Falling back to local build...
+echo       Building agent-sandbox image ^(this may take ~1-2 minutes^)...
+echo.
+docker build -t agent-sandbox -f docker\Dockerfile . --quiet
+if errorlevel 1 (
+    echo       Retrying with verbose output...
+    docker build -t agent-sandbox -f docker\Dockerfile .
+    if errorlevel 1 (
+        echo [X] Docker build failed!
+        echo     Possible solutions:
+        echo     1. Check your internet connection (for pull attempt)
+        echo     2. Run: docker system prune -a
+        echo     3. Try setup.bat again
+        echo.
+        echo     Or pull manually later:
+        echo       docker pull mariasabbagh1/esib-ai-agent:latest
+        echo       docker tag mariasabbagh1/esib-ai-agent:latest agent-sandbox
+        pause
+        exit /b 1
+    )
+)
+echo [OK] Docker image built successfully (local fallback)
+
+:docker_done
 
 echo.
 
