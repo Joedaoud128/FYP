@@ -4,7 +4,6 @@
 [![Docker](https://img.shields.io/badge/docker-required-blue)](https://www.docker.com/)
 [![Docker Hub](https://img.shields.io/badge/docker%20hub-mariasabbagh1%2Fesib--ai--agent-blue)](https://hub.docker.com/r/mariasabbagh1/esib-ai-agent)
 [![Tests](https://github.com/Joedaoud128/FYP/actions/workflows/test.yml/badge.svg)](https://github.com/Joedaoud128/FYP/actions/workflows/test.yml)
-[![Coverage](https://img.shields.io/badge/coverage-48%25-brightgreen)](tests/)
 
 > Autonomous LLM agent for proactive code generation and reactive debugging
 
