@@ -2,7 +2,6 @@
 
 [![Python Version](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/downloads/)
 [![Docker](https://img.shields.io/badge/docker-required-blue)](https://www.docker.com/)
-[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Docker Hub](https://img.shields.io/badge/docker%20hub-mariasabbagh1%2Fesib--ai--agent-blue)](https://hub.docker.com/r/mariasabbagh1/esib-ai-agent)
 [![Tests](https://github.com/Joedaoud128/FYP/actions/workflows/test.yml/badge.svg)](https://github.com/Joedaoud128/FYP/actions/workflows/test.yml)
 [![Coverage](https://img.shields.io/badge/coverage-48%25-brightgreen)](tests/)
@@ -518,11 +517,6 @@ ollama pull qwen3:8b
 
 **Supervisor:** Anthony Assi
 
----
-
-## License
-
-MIT License — see [LICENSE](LICENSE) for details.
 
 ---
 
